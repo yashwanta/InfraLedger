@@ -120,6 +120,9 @@ func New(config Config) (*App, error) {
  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS collectors(id TEXT PRIMARY KEY,name TEXT NOT NULL,org_id TEXT NOT NULL,asset_id TEXT NOT NULL,user_id TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,created TEXT NOT NULL,expires INTEGER NOT NULL,last_seen TEXT);
  CREATE TABLE IF NOT EXISTS proxmox_connections(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,config TEXT NOT NULL,sealed TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'Queued',summary TEXT NOT NULL DEFAULT '{}',last_sync TEXT,next_run INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS remote_credentials(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,config TEXT NOT NULL,sealed TEXT NOT NULL,created TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS remote_scans(id TEXT PRIMARY KEY,asset_id TEXT NOT NULL,credential_id TEXT NOT NULL,org_id TEXT NOT NULL,user_id TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '{}',requested TEXT NOT NULL,finished TEXT);
+ CREATE TABLE IF NOT EXISTS remote_trust(asset_id TEXT NOT NULL,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,first_seen TEXT NOT NULL,PRIMARY KEY(asset_id,kind));
  CREATE TABLE IF NOT EXISTS discovery_profiles(collector_id TEXT PRIMARY KEY,config TEXT NOT NULL,requested_at TEXT,last_scan_at TEXT,last_discovery_at TEXT,summary TEXT NOT NULL DEFAULT '{}');`)
 	if e != nil {
 		db.Close()
@@ -165,6 +168,7 @@ func New(config Config) (*App, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel}
 	a.startProxmox()
+	a.startRemoteInventory()
 	return a, nil
 }
 func (a *App) Close() error { a.backgroundCancel(); a.backgroundWG.Wait(); return a.db.Close() }
@@ -371,6 +375,9 @@ func (a *App) route(req *http.Request, b M) result {
 		if path != "/api/export" && path != "/api/records" && !(strings.HasPrefix(path, "/api/records/") && strings.Count(path, "/") == 3) {
 			fail(403, "API tokens may only read documentation records and exports")
 		}
+	}
+	if path == "/api/remote-inventory" || strings.HasPrefix(path, "/api/remote-inventory/") {
+		return a.remoteRoute(req, u, b)
 	}
 	if path == "/api/integrations/proxmox" || strings.HasPrefix(path, "/api/integrations/proxmox/") {
 		return a.proxmoxRoute(req, u, b)

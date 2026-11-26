@@ -206,38 +206,101 @@ func proxmoxHTTPClient(config M) (*http.Client, error) {
 type proxmoxInventory struct {
 	Resources []M
 	Configs   map[string]M
-	Warnings  []string
+	// Agents holds read-only QEMU guest agent observations keyed like Configs.
+	Agents   map[string]M
+	Warnings []string
+}
+
+// proxmoxAgentEnabled reports whether a QEMU config enables the guest agent
+// ("agent: 1" or "agent: enabled=1,…").
+func proxmoxAgentEnabled(details M) bool {
+	value := strings.TrimSpace(fmt.Sprint(details["agent"]))
+	if value == "" || value == "<nil>" {
+		return false
+	}
+	first := strings.Split(value, ",")[0]
+	return first == "1" || first == "enabled=1" || strings.Contains(value, "enabled=1")
+}
+
+// parseAgentInterfaces turns a network-get-interfaces result into interfaces and
+// usable IPv4 addresses (loopback and link-local excluded).
+func parseAgentInterfaces(value any) ([]M, []string) {
+	interfaces, addresses := []M{}, []string{}
+	for _, raw := range anyList(obj(value)["result"]) {
+		item := obj(raw)
+		name := S(item, "name")
+		if name == "" || name == "lo" || strings.HasPrefix(strings.ToLower(name), "loopback") {
+			continue
+		}
+		ips := []string{}
+		for _, rawIP := range anyList(item["ip-addresses"]) {
+			ip := obj(rawIP)
+			if S(ip, "ip-address-type") != "ipv4" {
+				continue
+			}
+			addr, err := netip.ParseAddr(S(ip, "ip-address"))
+			if err != nil || !addr.Is4() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+				continue
+			}
+			ips = append(ips, addr.String())
+			if len(addresses) < 32 {
+				addresses = append(addresses, addr.String())
+			}
+		}
+		if len(interfaces) < 32 {
+			interfaces = append(interfaces, M{"name": truncate(name, 80), "mac": truncate(S(item, "hardware-address"), 40), "addresses": ips})
+		}
+	}
+	return interfaces, addresses
+}
+
+func anyList(value any) []any {
+	if list, ok := value.([]any); ok {
+		return list
+	}
+	return nil
+}
+
+func truncate(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
 }
 
 func fetchProxmox(ctx context.Context, config M, secret string) (proxmoxInventory, error) {
-	inventory := proxmoxInventory{Configs: map[string]M{}, Warnings: []string{}}
+	inventory := proxmoxInventory{Configs: map[string]M{}, Agents: map[string]M{}, Warnings: []string{}}
 	client, err := proxmoxHTTPClient(config)
 	if err != nil {
 		return inventory, err
 	}
 	defer client.CloseIdleConnections()
-	get := func(path string) (any, error) {
+	getStatus := func(path string) (any, int, error) {
 		req, err := http.NewRequestWithContext(ctx, "GET", S(config, "url")+"/api2/json"+path, nil)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid Proxmox endpoint")
+			return nil, 0, fmt.Errorf("Invalid Proxmox endpoint")
 		}
 		req.Header.Set("Authorization", "PVEAPIToken="+S(config, "tokenId")+"="+secret)
 		response, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("Cannot connect to Proxmox. Check network access, HTTPS certificate trust or fingerprint, and endpoint availability")
+			return nil, 0, fmt.Errorf("Cannot connect to Proxmox. Check network access, HTTPS certificate trust or fingerprint, and endpoint availability")
 		}
 		defer response.Body.Close()
 		if response.StatusCode != 200 {
 			if response.StatusCode == 401 || response.StatusCode == 403 {
-				return nil, fmt.Errorf("Proxmox denied read access. Check token validity and PVEAuditor permissions for both the user and token")
+				return nil, response.StatusCode, fmt.Errorf("Proxmox denied read access. Check token validity and PVEAuditor permissions for both the user and token")
 			}
-			return nil, fmt.Errorf("Proxmox returned HTTP %d", response.StatusCode)
+			return nil, response.StatusCode, fmt.Errorf("Proxmox returned HTTP %d", response.StatusCode)
 		}
 		var envelope M
 		if err = json.NewDecoder(io.LimitReader(response.Body, 8*1024*1024)).Decode(&envelope); err != nil {
-			return nil, fmt.Errorf("Proxmox returned an invalid inventory response")
+			return nil, 200, fmt.Errorf("Proxmox returned an invalid inventory response")
 		}
-		return envelope["data"], nil
+		return envelope["data"], 200, nil
+	}
+	get := func(path string) (any, error) {
+		data, _, err := getStatus(path)
+		return data, err
 	}
 	data, err := get("/cluster/resources")
 	if err != nil {
@@ -284,6 +347,49 @@ func fetchProxmox(ctx context.Context, config M, secret string) (proxmoxInventor
 	}
 	if failures > 0 {
 		inventory.Warnings = append(inventory.Warnings, fmt.Sprintf("Configuration details unavailable for %d guests; their inventory entries are still imported", failures))
+	}
+	// QEMU guest agent: live IPs, OS release and hostname reported by the running
+	// guest. Read-only GET calls; any failure leaves the guest's other data intact.
+	agentDenied, agentSilent := false, 0
+	for _, guest := range guests {
+		if agentDenied || ctx.Err() != nil {
+			break
+		}
+		key := S(guest, "type") + "/" + strconv.Itoa(int(N(guest, "vmid")))
+		details, ok := inventory.Configs[key]
+		if S(guest, "type") != "qemu" || S(guest, "status") != "running" || N(guest, "template") == 1 || !ok || !proxmoxAgentEnabled(details) {
+			continue
+		}
+		base := "/nodes/" + S(guest, "node") + "/qemu/" + strconv.Itoa(int(N(guest, "vmid"))) + "/agent/"
+		networks, status, e := getStatus(base + "network-get-interfaces")
+		if status == 401 || status == 403 {
+			agentDenied = true
+			break
+		}
+		if e != nil {
+			agentSilent++
+			inventory.Agents[key] = M{"status": "Not responding"}
+			continue
+		}
+		interfaces, addresses := parseAgentInterfaces(networks)
+		observation := M{"status": "Running", "interfaces": interfaces, "addresses": addresses}
+		if info, err := get(base + "get-osinfo"); err == nil {
+			result := obj(obj(info)["result"])
+			observation["osName"] = truncate(firstNonEmpty(S(result, "pretty-name"), S(result, "name")), 120)
+			observation["osVersion"] = truncate(S(result, "version"), 80)
+			observation["kernel"] = truncate(S(result, "kernel-release"), 80)
+			observation["osId"] = truncate(S(result, "id"), 40)
+		}
+		if host, err := get(base + "get-host-name"); err == nil {
+			observation["hostname"] = truncate(S(obj(obj(host)["result"]), "host-name"), 120)
+		}
+		inventory.Agents[key] = observation
+	}
+	if agentDenied {
+		inventory.Warnings = append(inventory.Warnings, "Guest agent details need an extra read permission: VM.GuestAgent.Audit (Proxmox VE 9) or VM.Monitor (Proxmox VE 8) on the token. Other inventory was imported")
+	}
+	if agentSilent > 0 {
+		inventory.Warnings = append(inventory.Warnings, fmt.Sprintf("QEMU guest agent enabled but not responding in %d running VMs; install or start qemu-guest-agent inside those guests", agentSilent))
 	}
 	inventory.Warnings = append(inventory.Warnings, "Only resources visible to this token are returned. Use cluster-wide read-only permissions to include all nodes and guests.")
 	return inventory, nil
@@ -413,12 +519,55 @@ func (a *App) importProxmox(connection M, inventory proxmoxInventory) M {
 			if ip := proxmoxConfiguredIP(details, kind); ip != "" {
 				fields["configuredIP"] = ip
 			}
-
+			if kind == "qemu" {
+				fields["guestAgentStatus"] = "Not enabled"
+				if proxmoxAgentEnabled(details) {
+					fields["guestAgentStatus"] = "Enabled; guest not running"
+					if S(guest, "status") == "running" {
+						fields["guestAgentStatus"] = "Not queried"
+					}
+				}
+			}
 		}
+		var old M
 		if previous := existing[key]; previous != nil {
-			old := decode(S(previous, "data"))
+			old = decode(S(previous, "data"))
 			if S(old, "category") != "Virtual machine" && S(old, "category") != "Container" {
 				fields["category"] = old["category"]
+			}
+		}
+		if agent, ok := inventory.Agents[key]; ok {
+			fields["guestAgentStatus"] = agent["status"]
+			if S(agent, "status") == "Running" {
+				addresses, _ := agent["addresses"].([]string)
+				fields["guestAgentIPs"] = addresses
+				fields["guestAgentInterfaces"] = agent["interfaces"]
+				fields["guestAgentSeen"] = seen
+				primary := ""
+				if len(addresses) > 0 {
+					primary = addresses[0]
+				}
+				fields["guestAgentIP"] = primary
+				// Only fill the inventory IP when it is empty or was set by the agent
+				// before, so manually documented addresses are never overwritten.
+				if primary != "" && (old == nil || S(old, "ip") == "" || S(old, "ipSource") == "QEMU guest agent") {
+					fields["ip"] = primary
+					fields["ipSource"] = "QEMU guest agent"
+				}
+				if host := S(agent, "hostname"); host != "" {
+					fields["observedHostname"] = host
+				}
+				if osName := S(agent, "osName"); osName != "" {
+					fields["osName"] = osName
+					fields["osVersion"] = agent["osVersion"]
+					fields["kernel"] = agent["kernel"]
+					if S(agent, "osId") == "mswindows" || strings.Contains(strings.ToLower(osName), "windows") {
+						fields["os"] = "Windows"
+					} else {
+						fields["os"] = "Linux"
+					}
+					fields["osSource"] = "Reported by the running guest (QEMU guest agent)"
+				}
 			}
 		}
 		upsert(key, fields, nil)
@@ -548,4 +697,13 @@ func (a *App) syncProxmox(profile M) {
 	a.audit(nil, "proxmox_synced", cid, fmt.Sprintf("Imported %v nodes and %v guests", summary["nodes"], summary["guests"]))
 	a.run("COMMIT")
 	a.broadcast()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
