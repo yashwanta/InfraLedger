@@ -1,7 +1,6 @@
-// Runs the API test suite against either backend through one interface:
+// Starts the Go server for the API test suite behind a small interface:
 //   createApp({dataDir}) -> { server: { listen(port, host, cb), address() }, db: { prepare(sql).get(...args) }, close() }
-// Backend is chosen with TRINETRA_BACKEND=node|go (default: node).
-// For Go, the binary is built once into a temp directory unless TRINETRA_BIN points to an existing build.
+// The binary is built once into a temp directory unless TRINETRA_BIN points to an existing build.
 import { spawn, execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -11,10 +10,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-export const backend = process.env.TRINETRA_BACKEND === 'go' ? 'go' : 'node';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** RFC 6238 TOTP (SHA-1, 6 digits, 30 s) — independent of either backend. */
+/** RFC 6238 TOTP (SHA-1, 6 digits, 30 s), computed independently of the server. */
 export function totp(seed, time = Date.now()) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = '';
@@ -56,7 +54,7 @@ async function waitForReady(url, child, output) {
   throw new Error('Go server did not become ready:\n' + output());
 }
 
-function createGoApp({ dataDir }) {
+export function createApp({ dataDir }) {
   let child, port;
   const app = {
     server: {
@@ -90,10 +88,4 @@ function createGoApp({ dataDir }) {
     },
   };
   return app;
-}
-
-export async function loadBackend() {
-  if (backend === 'go') return { createApp: createGoApp, totp };
-  const node = await import('../server.mjs');
-  return { createApp: node.createApp, totp };
 }

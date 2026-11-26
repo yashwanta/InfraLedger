@@ -42,11 +42,10 @@ Serve over HTTPS (for example behind a reverse proxy) for anything beyond local 
 ```sh
 npm test               # Go unit tests + full API suite against the Go server
 npm run test:go-unit   # go test ./...
-npm run test:go        # tests/app.test.mjs against a freshly built Go binary
-npm run test:api       # the same suite against the legacy Node server (server.mjs)
+npm run test:api       # tests/app.test.mjs against a freshly built Go binary
 ```
 
-`tests/harness.mjs` starts either backend behind one interface; set `TRINETRA_BIN` to reuse an existing Go build.
+`tests/harness.mjs` builds and starts the Go server for the API suite; set `TRINETRA_BIN` to reuse an existing build.
 
 ## Backup and recovery
 
@@ -59,7 +58,3 @@ The vault key encrypts every stored credential and MFA seed. **The database and 
 To restore, stop the server, replace the data directory with the backup, and start it again. If you use `VAULT_KEY`, back up that value separately and keep it out of source control.
 
 The in-app **Export documentation** download is JSON without credentials, users or attachment contents — useful for migration, not a full backup.
-
-## Legacy files
-
-`server.mjs` and `public/` are the original Node.js backend and vanilla-JS UI that the Go + React version replaces. They are kept only so the test suite can still compare both backends.

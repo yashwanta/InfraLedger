@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadBackend } from './harness.mjs';
-const { createApp, totp } = await loadBackend();
+import { createApp, totp } from './harness.mjs';
 
 test('complete documentation workflows and security boundaries',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'trinetra-test-'));let app=createApp({dataDir:dir});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));let base=`http://127.0.0.1:${app.server.address().port}`;
