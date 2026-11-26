@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public-assets/trinetra-logo-transparent.png" alt="Trinetra logo" width="220">
+  <img src="public-assets/trinetra-logo-transparent.png" alt="InfraLedger logo" width="220">
 </p>
 
-<h1 align="center">Trinetra IT Documentation</h1>
+<h1 align="center">InfraLedger</h1>
 
 <p align="center">
   Self-hosted IT documentation, asset inventory, network discovery and live dependency mapping.<br>

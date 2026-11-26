@@ -127,7 +127,7 @@ func collect(ctx context.Context) ([]Connection, error) {
 	return nil, fmt.Errorf("collector supports Windows and Linux; this platform is %s", runtime.GOOS)
 }
 func main() {
-	server := flag.String("server", "http://127.0.0.1:5173", "Trinetra server origin")
+	server := flag.String("server", "http://127.0.0.1:5173", "InfraLedger server origin")
 	interval := flag.Duration("interval", 30*time.Second, "Observation interval, minimum 5s")
 	discover := flag.Bool("discover", true, "Automatically discover host facts, interfaces and configured networks")
 	once := flag.Bool("once", false, "Send one snapshot and exit")

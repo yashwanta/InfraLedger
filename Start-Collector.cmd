@@ -6,7 +6,7 @@ if not exist "collector.exe" (
   pause
   exit /b 1
 )
-echo Trinetra infrastructure collector
+echo InfraLedger infrastructure collector
 echo Paste the device collector token from the app when prompted.
 echo The token is used for this process only and is not saved to a file.
 echo.

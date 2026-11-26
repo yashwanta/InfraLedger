@@ -300,7 +300,7 @@ func (a *App) visible(u M, where string, args ...any) []M {
 func (a *App) route(req *http.Request, b M) result {
 	path, method := req.URL.Path, req.Method
 	if path == "/api/status" && method == "GET" {
-		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "Trinetra IT", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
+		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "InfraLedger", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
 	}
 	if path == "/api/setup" && method == "POST" {
 		if a.get("SELECT id FROM users LIMIT 1") != nil {
@@ -407,7 +407,7 @@ func (a *App) route(req *http.Request, b M) result {
 		}
 		seed := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(random(20))
 		a.pending[S(u, "id")] = enrollment{Seed: seed, Expires: time.Now().Add(10 * time.Minute)}
-		return out(200, M{"seed": seed, "uri": "otpauth://totp/Trinetra:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=Trinetra"})
+		return out(200, M{"seed": seed, "uri": "otpauth://totp/InfraLedger:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=InfraLedger"})
 	}
 	if path == "/api/mfa/confirm" && method == "POST" {
 		p, ok := a.pending[S(u, "id")]
