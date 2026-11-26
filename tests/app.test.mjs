@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createApp, totp } from './harness.mjs';
 
 test('complete documentation workflows and security boundaries',async t=>{
- const dir=mkdtempSync(join(tmpdir(),'trinetra-test-'));let app=createApp({dataDir:dir});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));let base=`http://127.0.0.1:${app.server.address().port}`;
+ const dir=mkdtempSync(join(tmpdir(),'infraledger-test-'));let app=createApp({dataDir:dir});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));let base=`http://127.0.0.1:${app.server.address().port}`;
  const admin={cookie:'',csrf:''};let organization,rack,asset,network,address,article,credential,purchase,viewer,client,restricted,token;
  const password='Test-account-passphrase-2026!';
  async function call(path,method='GET',body,session=admin,extra={}){const response=await fetch(base+'/api'+path,{method,headers:{'Content-Type':'application/json',...(session?.cookie?{Cookie:session.cookie}:{}),...(session?.csrf?{'X-CSRF-Token':session.csrf}:{}),...extra},...(body!==undefined?{body:JSON.stringify(body)}:{})});let data;try{data=await response.json()}catch{data=null}if(response.headers.get('set-cookie')&&session)session.cookie=response.headers.get('set-cookie').split(';')[0];if(data?.csrf&&session)session.csrf=data.csrf;return {status:response.status,data,headers:response.headers}}

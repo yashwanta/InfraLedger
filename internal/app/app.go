@@ -84,7 +84,7 @@ func New(config Config) (*App, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("vault key must contain 32 bytes")
 	}
-	db, e := sql.Open("sqlite", filepath.Join(config.DataDir, "trinetra.sqlite"))
+	db, e := sql.Open("sqlite", DatabasePath(config.DataDir))
 	if e != nil {
 		return nil, e
 	}
@@ -207,7 +207,7 @@ func (a *App) session(r *http.Request) (M, M, bool) {
 		}
 		return a.get("SELECT * FROM users WHERE id=? AND active=1", S(t, "user_id")), nil, true
 	}
-	cookie, e := r.Cookie("trinetra_session")
+	cookie, e := r.Cookie("infraledger_session")
 	if e != nil {
 		return nil, nil, false
 	}
@@ -221,7 +221,7 @@ func (a *App) createSession(u M) result {
 	rawToken, csrf := token(32), token(24)
 	a.run("DELETE FROM sessions WHERE expires<?", time.Now().UnixMilli())
 	a.run("INSERT INTO sessions VALUES(?,?,?,?)", digest(rawToken), S(u, "id"), csrf, time.Now().Add(8*time.Hour).UnixMilli())
-	cookie := (&http.Cookie{Name: "trinetra_session", Value: rawToken, Path: "/", HttpOnly: true, Secure: a.config.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: 28800}).String()
+	cookie := (&http.Cookie{Name: "infraledger_session", Value: rawToken, Path: "/", HttpOnly: true, Secure: a.config.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: 28800}).String()
 	return result{status: 200, body: M{"user": a.publicUser(u), "csrf": csrf}, headers: http.Header{"Set-Cookie": []string{cookie}}}
 }
 func (a *App) visible(u M, where string, args ...any) []M {
@@ -236,7 +236,7 @@ func (a *App) visible(u M, where string, args ...any) []M {
 func (a *App) route(req *http.Request, b M) result {
 	path, method := req.URL.Path, req.Method
 	if path == "/api/status" && method == "GET" {
-		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "Trinetra IT", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
+		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "InfraLedger", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
 	}
 	if path == "/api/setup" && method == "POST" {
 		if a.get("SELECT id FROM users LIMIT 1") != nil {
@@ -253,6 +253,7 @@ func (a *App) route(req *http.Request, b M) result {
 		if b["samples"] == true {
 			a.seed(u)
 		}
+		a.installGuide(u)
 		r := a.createSession(u)
 		r.status = 201
 		return r
@@ -300,7 +301,7 @@ func (a *App) route(req *http.Request, b M) result {
 	}
 	if path == "/api/logout" && method == "POST" {
 		a.run("DELETE FROM sessions WHERE token=?", S(session, "token"))
-		return result{status: 200, body: M{"ok": true}, headers: http.Header{"Set-Cookie": []string{"trinetra_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"}}}
+		return result{status: 200, body: M{"ok": true}, headers: http.Header{"Set-Cookie": []string{"infraledger_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"}}}
 	}
 	if path == "/api/password" && method == "POST" {
 		if !checkPassword(S(b, "current"), S(u, "password")) {
@@ -321,7 +322,7 @@ func (a *App) route(req *http.Request, b M) result {
 		}
 		seed := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(random(20))
 		a.pending[S(u, "id")] = enrollment{Seed: seed, Expires: time.Now().Add(10 * time.Minute)}
-		return out(200, M{"seed": seed, "uri": "otpauth://totp/Trinetra:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=Trinetra"})
+		return out(200, M{"seed": seed, "uri": "otpauth://totp/InfraLedger:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=InfraLedger"})
 	}
 	if path == "/api/mfa/confirm" && method == "POST" {
 		p, ok := a.pending[S(u, "id")]
@@ -396,6 +397,12 @@ func (a *App) route(req *http.Request, b M) result {
 			a.audit(u, "attachment_delete", S(file, "record_id"), "")
 			return out(200, M{"ok": true})
 		}
+	}
+	if path == "/api/guide" && method == "POST" {
+		requireAdmin(u)
+		created, updated := a.installGuide(u)
+		a.audit(u, "guide_install", "", fmt.Sprintf("%d created, %d updated", created, updated))
+		return out(200, M{"created": created, "updated": updated, "organization": GuideOrganization})
 	}
 	if path == "/api/favorites" && method == "GET" {
 		outRows := []M{}
@@ -487,7 +494,7 @@ func (a *App) route(req *http.Request, b M) result {
 			fail(403, "Workspace export is unavailable for client accounts")
 		}
 		a.audit(u, "documentation_export", "", "")
-		return out(200, M{"format": "trinetra-documentation-v1", "exportedAt": timestamp(), "records": a.visible(u, "deleted IS NULL AND type<>'passwords'")})
+		return out(200, M{"format": "infraledger-documentation-v1", "exportedAt": timestamp(), "records": a.visible(u, "deleted IS NULL AND type<>'passwords'")})
 	}
 	if path == "/api/import" && method == "POST" {
 		requireWrite(u)
@@ -518,4 +525,17 @@ func (a *App) validateOrgs(u M, role string, orgs []string) {
 			fail(400, "Select an organization")
 		}
 	}
+}
+
+// DatabasePath returns the SQLite file in dataDir. Workspaces created before the
+// rename to InfraLedger keep using their original trinetra.sqlite file.
+func DatabasePath(dataDir string) string {
+	legacy := filepath.Join(dataDir, "trinetra.sqlite")
+	current := filepath.Join(dataDir, "infraledger.sqlite")
+	if _, e := os.Stat(current); errors.Is(e, os.ErrNotExist) {
+		if _, e := os.Stat(legacy); e == nil {
+			return legacy
+		}
+	}
+	return current
 }

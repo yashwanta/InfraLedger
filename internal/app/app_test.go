@@ -174,7 +174,7 @@ func TestVaultSecretsEncryptedAtRest(t *testing.T) {
 	if _, present := cred["password"]; present {
 		t.Fatal("API response must not include the secret")
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "trinetra.sqlite")+"?mode=ro")
+	db, err := sql.Open("sqlite", DatabasePath(dir)+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,3 +260,55 @@ func TestStaticFrontendServed(t *testing.T) {
 }
 
 func writeFile(path, content string) error { return os.WriteFile(path, []byte(content), 0600) }
+
+func TestLegacyDatabaseFileKept(t *testing.T) {
+	dir := t.TempDir()
+	if got := DatabasePath(dir); filepath.Base(got) != "infraledger.sqlite" {
+		t.Fatalf("new workspace: %s", got)
+	}
+	if err := writeFile(filepath.Join(dir, "trinetra.sqlite"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := DatabasePath(dir); filepath.Base(got) != "trinetra.sqlite" {
+		t.Fatalf("existing workspace must keep its database: %s", got)
+	}
+}
+
+func TestUserGuideInstalled(t *testing.T) {
+	a, srv, _ := newServer(t)
+	admin := setup(t, srv.URL)
+	guides := guideArticles()
+	if len(guides) < 28 {
+		t.Fatalf("expected a guide per page, got %d", len(guides))
+	}
+	_, list := admin.call("GET", "/records?type=articles", nil)
+	count := 0
+	for _, item := range list["items"].([]any) {
+		if obj(item)["category"] == "User guide" {
+			count++
+		}
+	}
+	if count != len(guides) {
+		t.Fatalf("setup installed %d guide articles, want %d", count, len(guides))
+	}
+	// Re-running changes nothing; an edited guide is restored as a new version.
+	if status, body := admin.call("POST", "/guide", map[string]any{}); status != 200 || body["created"] != 0.0 || body["updated"] != 0.0 {
+		t.Fatalf("repeat install: %d %v", status, body)
+	}
+	r := a.get("SELECT * FROM records WHERE type='articles' AND deleted IS NULL ORDER BY created LIMIT 1")
+	data := decode(S(r, "data"))
+	data["content"], data["version"] = "edited", r["version"]
+	if status, _ := admin.call("PUT", "/records/"+S(r, "id"), data); status != 200 {
+		t.Fatalf("edit guide: %d", status)
+	}
+	if _, body := admin.call("POST", "/guide", map[string]any{}); body["updated"] != 1.0 {
+		t.Fatalf("refresh: %v", body)
+	}
+	viewer := newClient(t, srv.URL)
+	admin.call("POST", "/users", map[string]any{"name": "V", "email": "v@example.test", "password": testPassword, "role": "viewer"})
+	_, login := viewer.call("POST", "/login", map[string]any{"email": "v@example.test", "password": testPassword})
+	viewer.csrf, _ = login["csrf"].(string)
+	if status, _ := viewer.call("POST", "/guide", map[string]any{}); status != 403 {
+		t.Fatalf("non-admin install: %d", status)
+	}
+}

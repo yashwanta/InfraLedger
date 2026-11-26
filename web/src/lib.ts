@@ -110,7 +110,7 @@ export function exportCSV(type: Entity, rows: Rec[]) {
   // Quote every value and neutralise spreadsheet formula prefixes.
   const encode = (v: unknown) => '"' + String(v ?? '').replaceAll('"', '""') + '"';
   const safe = (v: unknown) => /^[=+@\-\t\r]/.test(String(v || '')) ? "'" + v : v;
-  download([keys.map(encode).join(','), ...rows.map(r => keys.map(k => encode(safe(r[k]))).join(','))].join('\r\n'), `trinetra-${type}.csv`, 'text/csv;charset=utf-8');
+  download([keys.map(encode).join(','), ...rows.map(r => keys.map(k => encode(safe(r[k]))).join(','))].join('\r\n'), `infraledger-${type}.csv`, 'text/csv;charset=utf-8');
 }
 
 export function generatePassword() {

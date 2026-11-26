@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"infraledger/internal/app"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata"
-	"trinetra/internal/app"
 )
 
 func env(key, fallback string) string {
@@ -39,7 +39,7 @@ func main() {
 		defer cancel()
 		server.Shutdown(ctx)
 	}()
-	fmt.Printf("Trinetra IT — Go REST API + React / TypeScript\nhttp://%s\nData: %s\n", *addr, *data)
+	fmt.Printf("InfraLedger — Go REST API + React / TypeScript\nhttp://%s\nData: %s\n", *addr, *data)
 	if e = server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
 		log.Fatal(e)
 	}

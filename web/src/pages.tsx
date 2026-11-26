@@ -249,7 +249,7 @@ export function Reports() {
     generatedAt: new Date().toISOString(), organization: app.scope || 'all',
     assets: app.ofType('assets').filter(app.inScope), purchases: app.ofType('purchases').filter(app.inScope),
     expirations: app.expirations().map(v => ({ name: v.r.name, org: app.title(v.r.orgId), type: v.kind, due: v.date, days: days(v.date) })),
-  }, null, 2), 'trinetra-report.json');
+  }, null, 2), 'infraledger-report.json');
   return <>
     <Heading title="Documentation & operations reports" sub={subtitles.reports}><button onClick={exportReport}><Icon name="download" />Export report</button></Heading>
     <div className="stats">
@@ -288,7 +288,7 @@ export function Settings({ onPasswordChanged }: { onPasswordChanged: (r: { user:
         <button onClick={() => app.modal(u.mfa ? 'Disable authenticator MFA' : 'Set up authenticator MFA', <MfaForm />, 'small')}>{u.mfa ? 'Disable MFA' : 'Set up authenticator'}</button></div>
       <div className="panel"><h2>Documentation export</h2>
         <p>Download organization documentation as JSON. Credentials, user accounts, and file attachment contents are excluded. Use a server backup for complete recovery.</p>
-        {u.role !== 'client' && <Act onClick={async () => { download(JSON.stringify(await api('/export'), null, 2), 'trinetra-documentation.json'); app.toast('Documentation exported; credentials excluded'); }}>
+        {u.role !== 'client' && <Act onClick={async () => { download(JSON.stringify(await api('/export'), null, 2), 'infraledger-documentation.json'); app.toast('Documentation exported; credentials excluded'); }}>
           <Icon name="download" />Export documentation</Act>}
         <h3 style={{ marginTop: 25 }}>Server backups</h3>
         <p>Stop the server, then back up the complete data directory. The database and vault key must be restored together. See README for commands and recovery guidance.</p></div>
@@ -296,6 +296,14 @@ export function Settings({ onPasswordChanged }: { onPasswordChanged: (r: { user:
         <p>Create a revocable, 30-day API token to read documentation from external tools. Secrets cannot be revealed through API tokens.</p>
         <button onClick={() => app.modal('Read-only API tokens', <Tokens />)}>Manage API tokens</button>
         <div className="code-block" style={{ marginTop: 18 }}>GET /api/records?type=assets<br />Authorization: Bearer &lt;token&gt;</div></div>}
+      {app.admin && <div className="panel"><h2>User guide</h2>
+        <p>A guide for every page lives in the Knowledge base under the <strong>InfraLedger Help</strong> organization. Install it, or refresh guides you have edited back to the latest version. Your own articles are never changed.</p>
+        <Act onClick={async () => {
+          const r = await api<{ created: number; updated: number }>('/guide', 'POST', {});
+          await app.reload();
+          app.toast(r.created || r.updated ? `User guide: ${r.created} added, ${r.updated} updated` : 'User guide is already up to date');
+        }}><Icon name="articles" />Install / update user guide</Act>
+        <button className="text-button" style={{ marginLeft: 12 }} onClick={() => app.navigate('articles')}>Open knowledge base</button></div>}
       <div className="panel"><h2>Integration boundaries</h2>
         <p>CSV import/export and a read-only JSON API are available. Vendor-specific PSA/RMM/cloud synchronization, discovery agents, automated live certificate checks, SSO, browser extensions, and email delivery are not connected in this release.</p>
         <p>Expirations use the dates you document. Network maps show saved documentation, not live network discovery.</p></div>
@@ -374,7 +382,7 @@ export function Audit() {
   if (!app.admin) return <Empty title="Administrator access required" />;
   return <>
     <Heading title="Audit log" sub="Server-recorded changes, sign-ins, and secret access. Most recent 1,000 events.">
-      <button disabled={!state[0]} onClick={() => download(JSON.stringify(state[0], null, 2), 'trinetra-audit.json')}><Icon name="download" />Export audit</button></Heading>
+      <button disabled={!state[0]} onClick={() => download(JSON.stringify(state[0], null, 2), 'infraledger-audit.json')}><Icon name="download" />Export audit</button></Heading>
     <Remote state={state}>{rows => <div className="panel"><div className="table-scroll"><table>
       <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Record</th><th>Details</th></tr></thead>
       <tbody>{rows.map((r, i) => <tr key={i}><td>{when(r.time)}</td><td>{r.actor}</td><td>{r.action.replaceAll('_', ' ')}</td>

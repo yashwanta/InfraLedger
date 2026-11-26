@@ -1,6 +1,6 @@
 // Starts the Go server for the API test suite behind a small interface:
 //   createApp({dataDir}) -> { server: { listen(port, host, cb), address() }, db: { prepare(sql).get(...args) }, close() }
-// The binary is built once into a temp directory unless TRINETRA_BIN points to an existing build.
+// The binary is built once into a temp directory unless INFRALEDGER_BIN points to an existing build.
 import { spawn, execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -25,11 +25,11 @@ export function totp(seed, time = Date.now()) {
   return ((mac.readUInt32BE(offset) & 0x7fffffff) % 1000000).toString().padStart(6, '0');
 }
 
-let binary = process.env.TRINETRA_BIN;
+let binary = process.env.INFRALEDGER_BIN;
 function goBinary() {
   if (!binary) {
-    binary = join(mkdtempSync(join(tmpdir(), 'trinetra-bin-')), process.platform === 'win32' ? 'trinetra.exe' : 'trinetra');
-    execFileSync('go', ['build', '-o', binary, './cmd/trinetra'], { cwd: root, stdio: 'inherit' });
+    binary = join(mkdtempSync(join(tmpdir(), 'infraledger-bin-')), process.platform === 'win32' ? 'infraledger.exe' : 'infraledger');
+    execFileSync('go', ['build', '-o', binary, './cmd/infraledger'], { cwd: root, stdio: 'inherit' });
   }
   return binary;
 }
@@ -76,7 +76,7 @@ export function createApp({ dataDir }) {
       prepare(sql) {
         return {
           get(...args) {
-            const db = new DatabaseSync(join(dataDir, 'trinetra.sqlite'), { readOnly: true });
+            const db = new DatabaseSync(join(dataDir, 'infraledger.sqlite'), { readOnly: true });
             try { return db.prepare(sql).get(...args); } finally { db.close(); }
           },
         };

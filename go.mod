@@ -1,4 +1,4 @@
-module trinetra
+module infraledger
 
 go 1.25.0
 

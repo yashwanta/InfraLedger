@@ -10,7 +10,7 @@ import { Audit, Dashboard, Expirations, Favorites, ListPage, Racks, Reports, Set
 type Boot = { state: 'loading' } | { state: 'error'; message: string } | { state: 'auth'; setup: boolean } | { state: 'ready' };
 
 function Brand() {
-  return <><img src="/favicon.svg" alt="" /><span>trinetra<small>IT DOCUMENTATION</small></span></>;
+  return <><img src="/favicon.svg" alt="" /><span>InfraLedger<small>IT DOCUMENTATION</small></span></>;
 }
 
 function AuthScreen({ setup, onSignedIn }: { setup: boolean; onSignedIn: (r: { user: User; csrf: string }) => Promise<void> }) {
@@ -25,7 +25,7 @@ function AuthScreen({ setup, onSignedIn }: { setup: boolean; onSignedIn: (r: { u
       <footer>Inventory · Networks · Knowledge · Operations</footer></div>
     <div className="auth-form-wrap"><form className="auth-form" onSubmit={onSubmit}>
       <h2>{setup ? 'Create your workspace' : 'Welcome back'}</h2>
-      <p className="subtitle">{setup ? 'Set up your first administrator account.' : 'Sign in to your Trinetra workspace.'}</p>
+      <p className="subtitle">{setup ? 'Set up your first administrator account.' : 'Sign in to your InfraLedger workspace.'}</p>
       {setup && <label className="form-field">Full name<input name="name" required autoComplete="name" maxLength={120} /></label>}
       <label className="form-field">Email<input name="email" type="email" required autoComplete="username" /></label>
       <label className="form-field">Password<input name="password" type="password" required minLength={setup ? 12 : undefined} maxLength={256} autoComplete={setup ? 'new-password' : 'current-password'} /></label>
@@ -200,7 +200,7 @@ export default function App() {
         </div>
       </header>
       <main id="main"><PageView page={page} diagram={diagram} setDiagram={setDiagram} saveDiagram={doSaveDiagram} onPasswordChanged={onPasswordChanged} /></main>
-      <footer className="footer"><span>Trinetra IT · Self-hosted workspace</span><span>Knowledge that keeps your team moving.</span></footer>
+      <footer className="footer"><span>InfraLedger · Self-hosted IT documentation</span><span>Knowledge that keeps your team moving.</span></footer>
     </div>
     {dialog && <Modal key={dialog.key} title={dialog.title} size={dialog.size} onClose={close}>{dialog.content}</Modal>}
     {toastEl}
