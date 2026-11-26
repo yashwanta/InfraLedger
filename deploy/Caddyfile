@@ -1,0 +1,7 @@
+# Replace this hostname with your own. Install/run Caddy separately.
+# Set APP_ORIGIN=https://docs.example.com and COOKIE_SECURE=1 for the Go server.
+docs.example.com {
+    reverse_proxy 127.0.0.1:5173 {
+        flush_interval -1
+    }
+}

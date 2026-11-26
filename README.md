@@ -1,176 +1,221 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo-light.svg" alt="InfraLedger" width="440">
-  </picture>
+  <img src="public-assets/trinetra-logo-transparent.png" alt="Trinetra logo" width="220">
 </p>
+
+<h1 align="center">Trinetra IT Documentation</h1>
 
 <p align="center">
-  <strong>All your IT documentation in one secure, self-hosted place.</strong><br>
-  Devices, networks, passwords, racks, diagrams, runbooks, licenses and renewals: one connected record for every organization you support.
+  Self-hosted IT documentation, asset inventory, network discovery and live dependency mapping.<br>
+  Built with <b>Go</b>, <b>React</b>, <b>TypeScript</b> and <b>SQLite</b>.
 </p>
 
-<p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white">
-  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white">
-  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-embedded-003B57?logo=sqlite&logoColor=white">
-  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-single%20binary-167f71">
-</p>
+A self-hosted IT documentation application built with **Go, React, TypeScript, and SQLite**. It includes a device/application/port dependency map with server-sent updates and an optional endpoint collector.
 
-<p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#screenshots">Screenshots</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#user-guide">User guide</a> ·
-  <a href="#security">Security</a> ·
-  <a href="#backup-and-recovery">Backup</a>
-</p>
+## Run the Windows release
 
-![InfraLedger workspace overview](docs/assets/screenshot-overview.jpg)
+1. Extract the entire Windows ZIP into a folder you control. Keep `trinetra.exe`, `collector.exe`, and `dist/` together.
+2. Double-click `Start-Trinetra.cmd`, or run `trinetra.exe` from that folder.
+3. Open **http://127.0.0.1:5173**.
+4. Create your administrator account and enter the installation IP subnet (for example `10.20.30.0/24`). You can defer discovery configuration if needed. Subnet defaults are saved without enabling probes; install a collector and explicitly enable TCP scanning to begin network discovery. There is no default administrator password. The optional sample records are fictional.
+5. Enable authenticator MFA under **Setup → General settings** and add any other users under **Setup → User Management**.
 
-## What is InfraLedger?
+The server binds to loopback by default. Its terminal must stay open. Press Ctrl+C to stop it. Node.js and Go are not required to run the prebuilt Windows release.
 
-InfraLedger is the **ledger for your infrastructure**: a self-hosted workspace where IT teams and managed service providers record everything about the systems they run, and see how it all connects.
+## Implemented workflows
 
-Instead of passwords in one tool, network notes in a wiki, rack layouts in a spreadsheet and renewal dates in someone's calendar, InfraLedger keeps them together, organized by **organization** (client, company or site). Every record can link to related records: a firewall links to its credentials, its rack position, its IP addresses, its switch ports and the diagram it appears in.
+| Area | Included |
+|---|---|
+| Organizations | Organization records, scoped access, contacts, locations, related records |
+| Inventory | Devices, manufacturers/models, serials, IPs, ownership, lifecycle states, purchase costs, warranties, custom templates |
+| Passwords | AES-256-GCM encryption of passwords/TOTP seeds, password generation, reauthenticated reveal, TOTP generation, audited secret access |
+| Networks | IPv4 CIDR subnets, VLANs, gateways, DNS, IP allocations, duplicate/out-of-subnet validation, port and cable documentation |
+| Racks | Server/network rack elevations, device positions and heights, occupied-unit totals, overlap/capacity validation |
+| Diagrams | Editable network/topology/flow diagrams, draggable nodes, labeled directional links, inventory references, saved layouts, SVG export |
+| Live dependency map | Devices, applications/services, networks, physical ports, IP allocations and dependency flows; protocol/port labels; upstream/downstream focus; 1–4 hops; search; SVG export |
+| Applications | Host devices, versions, listening ports, protocols, environments, owners, dependencies |
+| Endpoint observation | Optional Windows/Linux collector; host facts, interfaces, subnets, neighbor-cache devices, configured TCP scanning, local processes, listening sockets, active connections; device-scoped revocable tokens; last-observed timestamps |
+| Knowledge | Markdown article content, publication/review metadata, revisions and restore, attachments, comments, linked records, favorites |
+| Processes | Editable checklists and persistent completion tracking |
+| Procurement | Draft → Submitted → Approved → Ordered → Received; administrator approval; receipt creates linked inventory assets once |
+| Operations | Vendors, software seats, domains, certificates, agreements, expiration/review lists, reports and exports |
+| Access | IT Admin / IT Analyst / Plant IT / Users roles, per-page No access / View / Edit grants, organization/plant restrictions, legacy viewer/client compatibility, client-visible records, account disablement, MFA, hashed passwords, expiring sessions, CSRF checks |
+| Data | SQLite persistence, optimistic version checks, soft deletion/restore, transactional CSV imports, CSV/JSON exports, read-only API tokens, server audit events |
 
-It runs as a **single Go binary** with an embedded SQLite database. There's no external database or cloud service to set up, and your data stays on your server.
+This is an independently built application, not a certified IT Glue/Hudu clone or a claim of full vendor feature parity. PSA/RMM/cloud vendor connectors, SSO, mobile apps, browser extensions, secure external password-sharing links, email notifications, Office collaboration, recurring job scheduling, SNMP/LLDP topology integration, and automatic public SSL/DNS monitoring are not implemented. Expiration dates are entered documentation. The application has automated tests but has not had an independent security or penetration review.
 
-## Features
+## Live dependency map
 
-### 📚 Documentation
-- **Knowledge base:** Markdown articles with version history, restore, review dates, attachments and team comments
-- **Processes & runbooks:** checklists that track progress and complete themselves when every step is done
-- **Client sharing:** mark records **Client visible** to share them with that client's users; internal comments stay private
+Open **Live dependency map**. The graph is derived from:
 
-### 🔐 Password vault
-- Credentials **encrypted at rest** (AES-256-GCM) and never returned by the API
-- Revealing a secret requires **re-entering your password** (and MFA code), is **audited**, and auto-hides after 30 seconds
-- Stored TOTP seeds generate live authenticator codes; built-in strong password generator
+- Network → device links from IP allocations.
+- Device → physical port → connected device links from port/cabling records.
+- Device → application links from application host and listening-port fields.
+- Application/device → application/device links from dependency records.
+- Observed listening/traffic dependencies received from collectors.
 
-### 🖥️ Inventory & procurement
-- **Asset inventory** with lifecycle status, warranty dates, costs and **custom fields** from asset templates
-- **Device purchasing:** Draft → Submitted → Approved → Ordered → Received, then receiving creates the devices in inventory automatically
+Choose a node, use **Focus dependencies**, and select a hop count to inspect the surrounding system. Protocol and destination port labels show how components interact. Double-click a graph node to open its documentation. Dragging the derived map changes the current view only; saved manual layouts belong in **Diagrams**.
 
-### 🌐 Infrastructure
-- **Networks & IPAM** with CIDR validation, gateway checks and duplicate-free IP allocation
-- **Ports & cabling** between devices, with cable IDs and VLANs
-- **Rack management** with unit-by-unit elevations and overlap/capacity validation
-- **Diagrams:** a drag-and-drop editor for topologies and traffic flows, with components linked to real assets and SVG export
+The browser subscribes to `/api/events`. Saved changes trigger a refresh in other open workspaces without a reload. Documentation updates are immediate; collector observations follow the configured interval (30 seconds by default). Observations older than 90 seconds are labeled stale. Historical observations remain in the documentation; a missing connection is not assumed to be a failed service.
 
-### 📅 Operations
-- Vendors, software licenses, domains, certificates, agreements, locations and contacts
-- **Expirations:** every warranty, renewal, certificate, password rotation and review due in the next 90 days, in one list
-- **Reports:** inventory value, open orders, articles due for review, license seats and rack utilization
+## Automatic infrastructure discovery
 
-### 🛡️ Management
-- Roles: **Admin**, **Editor**, **Viewer**, **Client**, with per-organization access
-- Authenticator-app **MFA**, 8-hour sessions, login rate limiting
-- **Audit log** of sign-ins, changes and secret access
-- **Recycle bin** with link-aware restore
-- **CSV import/export** (validated as a whole before saving), JSON export and a **read-only API** with revocable tokens
-- **Built-in user guide:** a knowledge base article for every page, installed automatically
+New installations ask for the site IP subnet. Existing installations can set defaults under **Infrastructure → Auto Discovery → Installation defaults**. The test configuration uses `10.20.30.0/24`; each actual installation should supply its own subnet.
 
-## Screenshots
+1. Create or select the organization/plant that owns the environment.
+2. Open **Auto Discovery → Add discovery collector**. Choose that organization, enter a name, and leave the host selector on **Automatically create the collector host**, or select an existing inventory device.
+3. Enter private IPv4 subnets and the TCP ports to test. Turn on **Enable TCP probes** only when you intend to probe those selected ranges. Choose a 5-minute to 24-hour scan interval.
+4. Copy the one-time token. On the target computer, double-click `Start-Collector.cmd` in the extracted app folder and enter the token and server URL when prompted. Alternatively, open a terminal in that folder and run:
 
-| Diagram editor | Password vault |
-| --- | --- |
-| ![Diagram editor with linked inventory assets](docs/assets/screenshot-diagrams.jpg) | ![Password vault requiring re-authentication](docs/assets/screenshot-vault.jpg) |
-
-| Built-in user guide |
-| --- |
-| ![Getting started guide in the knowledge base](docs/assets/screenshot-user-guide.jpg) |
-
-## Quick start
-
-**Requirements:** Go 1.25+ and Node.js 22.5+
-
-```sh
-git clone https://github.com/yashwanta/InfraLedger.git
-cd InfraLedger
-npm install
-npm run build             # React UI -> dist/
-npm run build:server      # Go server -> outputs/infraledger.exe
-outputs/infraledger.exe   # open http://127.0.0.1:5173
+```powershell
+$env:TRINETRA_TOKEN = '<device-scoped-token>'
+.\collector.exe -server https://docs.example.com -interval 30s
 ```
 
-On first visit, create the administrator account. You can include fictional sample records to explore, and the user guide is added to the knowledge base automatically.
+For **Command Prompt (CMD)**, use the following from the extracted Trinetra-Windows folder:
 
-**Development:** run `npm start` (Go API on :5173) and `npm run dev` (Vite with hot reload on :5175, proxying `/api`).
-
-### Configuration
-
-| Flag / env var | Default | Purpose |
-| --- | --- | --- |
-| `-addr` / `LISTEN_ADDR` | `127.0.0.1:5173` | HTTP listen address |
-| `-data` / `DATA_DIR` | `data` | Database, vault key and attachments |
-| `-static` / `STATIC_DIR` | `dist` | Built React UI |
-| `APP_ORIGIN` | — | Allowed origin when served behind a proxy |
-| `APP_TIMEZONE` | `America/New_York` | Time zone for due dates and expirations |
-| `COOKIE_SECURE=1` | off | Mark session cookies `Secure` (set when serving over HTTPS) |
-| `VAULT_KEY` | `data/vault.key` | Base64 32-byte vault key, instead of the key file |
-
-For anything beyond local use, serve InfraLedger over HTTPS, for example behind a reverse proxy, and set `COOKIE_SECURE=1`.
-
-### Read-only API
-
-Admins create API tokens in **Settings → Manage API tokens**. Tokens expire after 30 days, can read records and exports, and can never change data or reveal secrets.
-
-```sh
-curl -H "Authorization: Bearer <token>" http://127.0.0.1:5173/api/records?type=assets
+```bat
+set "TRINETRA_TOKEN=<device-scoped-token>"
+collector.exe -server http://127.0.0.1:5173 -interval 30s
 ```
 
-## User guide
+For **PowerShell**, use `$env:TRINETRA_TOKEN` and ` .\collector.exe` as in the example above. In either shell, the executable must be in the current folder or invoked by its full quoted path. The installation dialog includes separate shell tabs and a copy-command button. Do not add backslashes to the URL or the end of command lines.
 
-Every page has a guide in [`docs/kb/`](docs/kb). Start with [Getting started](docs/kb/00-getting-started.md).
+A collector on the same computer as a loopback server can use `http://127.0.0.1:5173`. Remote collectors require HTTPS. Tokens are scoped to a device and organization, expire after 90 days, and can be revoked under **Setup → Live collectors**. Tokens are not accepted as command-line flags and HTTP redirects are rejected. `-once` sends one snapshot and exits; `-discover=false` disables discovery while retaining socket observations.
 
-The guides are compiled into the server and installed as knowledge base articles under the **InfraLedger Help** organization:
+The collector automatically imports its hostname, operating system, available hardware facts, IPv4 interfaces and MAC addresses, local CIDR networks, gateways/DNS where available, neighbor-cache endpoints, processes, listening ports, and active connections. Windows uses local system information, `netstat`, `tasklist`, and `arp`; Linux uses local network interfaces, sysfs, `/proc`, and `ss`/`ip` from iproute2. Available facts depend on host permissions. It does not inspect traffic payloads or send data to a third-party service.
 
-- automatically when a new workspace is created, and
-- from **Settings → Install / update user guide** (admins), which adds missing guides and restores edited ones to the shipped text as a new version. Your own articles are never changed.
+Scheduled TCP discovery is limited to explicitly configured private IPv4 ranges (1,024 addresses total) and up to 32 TCP ports. It uses bounded parallel connections and a 90-second scan budget; partial results are labeled. **Discover now** queues a request for the next collector check-in. A queued request is not reported as completed while the collector is offline. Local observations normally follow the reporting interval, while active network scans follow the selected schedule. Scanning can delay a report within the bounded scan budget.
 
-To change a guide, edit its Markdown file (it must start with a `# Title` line), rebuild the server and use the Settings button.
+Discovered interfaces populate **Ports & cabling**, local/configured subnets populate **Networks & IPAM**, addresses are associated with discovered devices, and listening services create application and dependency records. A TCP response identifies an open port; application names inferred from standard port numbers are unverified. Discovered endpoints are labeled with their source and last-seen time. Repeated reports update records without creating duplicates.
 
-## Security
+This is collector-based discovery: the browser cannot probe a LAN by itself. Devices with no response on configured ports may appear only through the neighbor cache; lack of a response is not proof a device is offline. VLAN IDs, physical rack positions, switch-port cabling, and complete L2 topology are not guessed; those require manual documentation or an authenticated SNMP/LLDP/vendor integration. Domain and certificate dates remain documented fields, rather than live public monitoring.
 
-- **Passwords:** PBKDF2-SHA256 with 600,000 iterations and a per-user salt
-- **Vault:** AES-256-GCM with a random nonce per value; the key lives in `data/vault.key` or `VAULT_KEY`
-- **Sessions:** HttpOnly, SameSite=Strict cookies plus a CSRF token on every change; cross-origin writes are rejected
-- **Headers:** strict Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, `no-store`
-- **Access:** server-side role and organization checks on every request; clients never see internal comments
-- **Accountability:** audit log for sign-ins, changes, exports and every secret reveal
+## User roles and page access
 
-## Project structure
+Open **Setup → User Management → Add user / Edit access**. The roles are **IT Admin**, **IT Analyst**, **Plant IT**, and **Users**. Existing editor/viewer/client accounts remain compatible. IT Admin has full access; IT Analyst starts with operational editing; Plant IT starts with infrastructure editing and must be assigned organizations/plants; Users start with knowledge access.
 
-```
-cmd/infraledger/   Server entry point (flags, graceful shutdown)
-internal/app/      REST API, storage, validation, vault, user-guide installer
-docs/kb/           User guide, one Markdown file per page (embedded in the binary)
-web/src/           React + TypeScript frontend
-tests/             API test suite and harness that runs it against the Go binary
-```
+For each account choose **No access**, **View**, or **Edit** for individual pages. Role defaults can be restored, all pages can be set to View, or grants can be cleared. Permissions are enforced by the REST API and menus. View does not permit create/update/delete, comments, or attachment changes. Editing the password page also permits audited, reauthenticated secret reveals. Minimal organization names remain available for reference selectors, without granting access to organization details.
 
-## Tests
+Organization restrictions apply in addition to page grants. Client accounts still only see explicitly shared records in assigned organizations. Changing access revokes the affected account's sessions and read-only tokens. Account access administration, purchase approval and discovery configuration remain IT Admin operations, even when another role has View access to their pages.
 
-```sh
-npm test               # Go unit tests + full API suite against the Go server
-npm run test:go-unit   # go test ./...
-npm run test:api       # tests/app.test.mjs against a freshly built Go binary
+## Build from source
+
+Requirements: **Go 1.25+** and **Node.js 22.12+** with npm. The tested environment used Go 1.27.4 and Node.js 26.13. The runtime server is Go; Node is only needed to build the UI and run the HTTP integration tests.
+
+```powershell
+npm ci
+npm run build
+New-Item -ItemType Directory -Path outputs -Force
+go build -buildvcs=false -o outputs/trinetra.exe ./cmd/trinetra
+go build -buildvcs=false -o outputs/collector.exe ./cmd/collector
+.\outputs\trinetra.exe -static dist
 ```
 
-The API suite covers setup and login, CSRF, vault encryption and re-authentication, roles and client isolation, IPAM and rack validation, purchasing, diagrams, attachments, import rollback, the recycle bin, API tokens, MFA, password changes and restart persistence. Set `INFRALEDGER_BIN` to reuse an existing build.
+Or run `Build.ps1` to build and test everything. Go modules and npm package versions are locked in `go.sum` and `package-lock.json`.
 
-## Backup and recovery
+For Linux, build without `.exe` suffixes. `CGO_ENABLED=0` is supported; SQLite is provided by the pure-Go modernc driver.
 
-The vault key encrypts every stored credential and MFA seed. **Back up and restore the database and the vault key together**; a database without its key cannot reveal secrets.
+Development: run `go run ./cmd/trinetra` and `npm run dev` in separate terminals. Vite serves the React app on http://127.0.0.1:5175 and proxies `/api` (including SSE) to the Go server on port 5173.
 
-1. Stop the server so SQLite flushes its write-ahead log.
-2. Copy the entire data directory (`infraledger.sqlite` with its `-wal` and `-shm` files, and `vault.key`).
-3. Store the copy somewhere access-controlled; it holds encrypted secrets and the key to decrypt them.
+## Verify
 
-To restore, stop the server, replace the data directory with the backup and start it again. If you use `VAULT_KEY`, back up that value separately and keep it out of source control.
+```powershell
+go test -buildvcs=false ./...
+npm run build
+npm run test:api
+```
 
-Workspaces created before the project was renamed keep using their existing `trinetra.sqlite` file; no migration is needed.
+The API suite launches the compiled Go server in isolated temporary directories. It tests role/organization isolation, CSRF, encrypted credential handling and reauthentication, MFA, session revocation, IP/rack validation, purchase receipt idempotence, diagrams, checklists, comments, attachments, version restore, transactional imports, API/collector tokens, restart persistence, SSE signals, and telemetry deduplication. Tests create no production users or records and do not run live endpoint collection.
 
-**Export documentation** in Settings downloads JSON without credentials, users or attachment contents. It's useful for migration, not as a full backup.
+Browser QA confirmed React login, cross-tab dependency updates, application port creation, article editing, diagram persistence, purchasing/receipt and mobile page width. These checks used fictional data in a separate QA database.
+
+## Server configuration
+
+| Setting | Default / meaning |
+|---|---|
+| `-addr` / `LISTEN_ADDR` | `127.0.0.1:5173` |
+| `-data` / `DATA_DIR` | `data` |
+| `-static` / `STATIC_DIR` | `dist` |
+| `APP_TIMEZONE` | `America/New_York` |
+| `APP_ORIGIN` | Explicit public origin when behind a reverse proxy |
+| `COOKIE_SECURE` | Set `1` when serving through HTTPS |
+| `VAULT_KEY` | Optional base64-encoded 32-byte key supplied from a secret manager; otherwise `data/vault.key` is created |
+
+For remote access, place the loopback Go server behind an HTTPS reverse proxy, set `APP_ORIGIN` to the exact public origin and `COOKIE_SECURE=1`, and allow streaming on `/api/events` with buffering disabled. A sample `deploy/Caddyfile` is included. Public hosting, DNS, certificates and reverse-proxy installation have not been configured automatically.
+
+The default SQLite deployment serves a single application instance. API database work is serialized to keep multi-record validation and transaction behavior consistent. This is suitable for a small self-hosted deployment; large-scale or multi-instance deployment needs further architecture and load testing.
+
+## Backups and recovery
+
+Stop the server and back up the **entire data directory**, including the database, any SQLite WAL/SHM files, and `vault.key`. The database contains attachments, revisions and audit history. Protect the backup and data folder with filesystem permissions and encryption appropriate to your environment. Windows filesystem ACLs are inherited; Unix key-file permissions are set to owner-only.
+
+Restore the complete data directory into the configured data path while the server is stopped. If `VAULT_KEY` was supplied through the environment, restore that same secret from your secret manager. Losing the key makes vault secrets and MFA seeds unrecoverable. The key file and database are stored on the same server by default; this is server-managed encryption, not zero-knowledge encryption.
+
+Session tokens are stored as hashes. Account passwords use PBKDF2-HMAC-SHA256 with 600,000 iterations and individual salts. Legacy scrypt password hashes from the earlier local prototype can be verified during migration. Database backups contain password hashes and encrypted credential history, so ordinary documentation exports are intentionally not a full backup.
+
+There is no email password-reset service or MFA recovery-code flow in this release. Keep a separate administrator account available before adopting MFA operationally. Soft-deleted records can be restored; the application does not expose permanent deletion.
+
+## REST API
+
+Read-only tokens created in Setup → API access expire after 30 days. Send `Authorization: Bearer <token>` to `GET /api/records`, `GET /api/records/{id}`, or `GET /api/export`. Query parameters include `type`, `org`, and `q`. Secret values are never returned from these read routes. Read-only tokens cannot reveal secrets or access account administration.
+
+Interactive changes use the session cookie and `X-CSRF-Token` returned by sign-in. Important routes include `/api/records/{id}/versions`, `/revert`, `/reveal`, `/purchase`, `/attachments`, `/comments`, `/api/import`, `/api/users`, `/api/mfa/*`, `/api/collectors`, and `/api/events`.
+
+Collectors authenticate separately to `POST /api/telemetry`, with a token scoped to an existing host device and organization. Payload:
+
+```json
+{"connections":[{"protocol":"TCP","localAddress":"10.0.0.5","localPort":50001,"remoteAddress":"10.0.0.20","remotePort":5432,"state":"ESTABLISHED","pid":"1234","process":"application.exe"}]}
+```
+
+## Source layout
+
+- `cmd/trinetra/`: Go server entry point.
+- `cmd/collector/`: optional endpoint collector.
+- `internal/app/`: REST API, SQLite persistence, cryptography, access checks, SSE and telemetry.
+- `web/src/`: React/TypeScript application, forms, map and diagram components.
+- `tests/`: HTTP integration tests against the Go executable.
+- `dist/`: production frontend build.
+
+The package contains no user database, vault key, preconfigured account, collector token or production credentials.
+
+## Upgrade notes for discovery and page permissions
+
+Stop the existing server before replacing its executable, and back up the complete data directory. Replace the binaries and `dist/`, keep the existing database and `vault.key`, then restart. The server adds discovery-profile storage and the user permissions column automatically. It does not reset accounts, change existing administrator roles, or remove documentation. Existing administrators are labeled IT Admin. Review access defaults and assign plants before creating new Plant IT accounts.
+
+
+## Hardware, software, and services
+
+Infrastructure has separate Laptops & desktops, Servers, Installed applications, Services & processes, Application mapping, and Live dependency map pages. Windows/Linux tags use reported OS facts. Windows device types use computer system and operating system facts; Linux chassis facts are used where available. Unclassified hardware stays in Asset inventory and can be classified manually.
+
+The updated collector inventories Windows machine-wide uninstall registry entries (without Win32_Product) or Linux dpkg/rpm/apk packages every 15 minutes. Windows services include description, executable path, start mode, account, state, and PID. Linux systemd loaded units report name, state, and description. Managed services refresh once a minute. Network-active process observations continue at the configured interval. Unsupported service managers, portable applications, and per-user software may not appear.
+
+Service review flags explain wildcard listeners, unresolved process names, ports commonly associated with cleartext protocols, and service executable paths in user/temporary directories. Names and port numbers do not establish identity. This is configuration review, not malware, signature, or vulnerability scanning. Service records retain historical observations; consult last-observed timestamps.
+
+Existing collector-created process and port-service records are migrated from Applications to Services without changing their IDs or links. Manually documented applications are preserved. Restart the updated collector to populate installed software and managed service facts; older collectors continue reporting network processes.
+
+The live map starts focused on a host, groups process traffic by host, hides unverified remote endpoints and low-level ports by default, and allows service, port, endpoint, and observed-traffic layers to be enabled. Stale observations are excluded after 90 seconds. Installed applications without documented relationships are explored in Application mapping instead of filling the live graph. Explicitly link verified services using an application's Related records field. Shared hosting does not prove process ownership. Documented dependencies represent confirmed reliance; observed connections only establish traffic.
+
+If local permissions block CIM or Service Control Manager, the collector reports unavailable inventory in the host record. It retains network-process observations instead of presenting failed service enumeration as an empty service list. Missing software in a subsequent complete inventory is marked Not present; its documentation is retained.
+
+Hardware pages also list local devices awaiting identification, with IP/MAC, discovery evidence, and a Review device action. Unknown endpoints are not silently labeled as servers. Search includes IP addresses. These lists use the current organization scope and record access permissions.
+
+Enabled subnet scans can identify Proxmox VE from its public HTTPS title and pve-api-daemon header on configured TCP 8006, and infer Linux from distribution-specific SSH banners on TCP 22. SSH alone does not classify a machine as a server. Identity evidence is visible in the asset record and is explicitly unauthenticated. The collector sends no credentials or cookies and follows no redirects during fingerprinting; its dedicated public identification probe does not verify the HTTPS certificate, so this is not authenticated hardware inventory. Existing manually assigned device roles are preserved. Restart the updated collector and include 8006 in scan ports to use this identification.
+
+Servers also shows Additional Linux hosts — server role unconfirmed. Distribution-specific SSH evidence puts otherwise unclassified hosts in this separate candidate list. It does not relabel Linux desktops, network devices, or already classified hardware as servers. Each candidate exposes its SSH banner and evidence for review.
+
+
+## Review before adding discovered inventory
+
+Auto Discovery now has an Awaiting inventory approval queue. New collector-discovered devices and Proxmox nodes/guests are Pending. Review a device and choose Approve and add to inventory. Pending devices, their guests, and linked observations are excluded from inventory views and maps until approved. Hosts must be approved before their guests. Approval records the approver and time, is idempotent, and requires asset editing permission within the organization. Further discovery updates preserve approval. Existing identified inventory remains available; previously unclassified local discovery endpoints move to review. General documentation/API exports retain the explicit approvalStatus field so pending observations remain reviewable.
+
+## Proxmox VM and container integration
+
+Go to Setup → Integrations → Connect Proxmox. Configure an organization, an HTTPS node URL such as https://10.20.30.120:8006, a token ID in user@realm!token-name format, and its secret. Use a dedicated read-only API account. Assign PVEAuditor at / with propagation to both the user and the privilege-separated API token. Tokens can only see resources allowed by their ACLs; the app cannot guarantee a complete cluster inventory with narrower permissions. One connection covers the visible nodes in a cluster. Separate standalone hosts need separate connections.
+
+HTTPS trust uses system roots by default. For private certificates, provide a trusted CA PEM or an independently verified SHA-256 leaf-certificate fingerprint. Pinning verifies the exact certificate and its validity before transmitting the token; there is no accept-any-certificate option. Redirects and environment proxies are disabled for credential-bearing requests. Token secrets are encrypted using the existing vault key, never returned by the connection API, and excluded from documentation export.
+
+The connector makes GET requests only: /api2/json/cluster/resources and each guest's qemu/lxc config endpoint. It imports QEMU guests, LXC containers, templates, runtime state, CPU, configured memory/disk capacity, configured OS type, and static/cloud-init IP where reported. It does not power on, stop, modify, or log into guests. DHCP/guest-agent addresses and applications inside guests require additional guest/collector data. Guest OS tags reflect configured guest types, not an independent inspection of the running OS. Unavailable guest configurations are reported without discarding the guest list.
+
+The default polling interval is five minutes (configurable, minimum one minute). Sync now queues a background refresh without blocking the interface. New devices enter review; approved guests appear in Virtual machines & containers and link to their Proxmox host. VM IDs remain stable across node migration and repeated syncs. Missing API entries are marked Not reported in latest Proxmox response, never deleted automatically; disappearance can also reflect permission changes. Pausing preserves imported records. Removing a connection through the API removes its saved credentials and preserves documentation. Integration management is restricted to IT Admin. An inactive or demoted connection owner stops imports until an active administrator edits the connection.
+
+Proxmox token/ACL documentation: https://pve.proxmox.com/pve-docs/pve-admin-guide.html#pveum_tokens

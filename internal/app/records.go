@@ -21,12 +21,47 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		}
 		return out(200, outRecord)
 	}
+	if action == "approve" && method == "POST" {
+		if kind != "assets" {
+			fail(400, "Only discovered devices require inventory approval")
+		}
+		a.recordWritable(u, r)
+		d := decode(S(r, "data"))
+		if S(d, "approvalStatus") == "Approved" {
+			return out(200, a.safe(r))
+		}
+		if S(d, "hostId") != "" {
+			parent := a.get("SELECT data FROM records WHERE id=? AND deleted IS NULL", d["hostId"])
+			if parent == nil {
+				fail(409, "The virtualization host is unavailable")
+			}
+			if S(decode(S(parent, "data")), "approvalStatus") == "Pending" {
+				fail(409, "Approve the virtualization host before adding this guest")
+			}
+		}
+		d["approvalStatus"] = "Approved"
+		d["approvedAt"] = timestamp()
+		d["approvedBy"] = S(u, "name")
+		d["version"] = r["version"]
+		approved := a.update(u, r, d)
+		a.audit(u, "discovery_approved", recordID, "Added discovered device to inventory")
+		return out(200, approved)
+	}
 	if action == "" && method == "PUT" {
-		requireWrite(u)
+		a.recordWritable(u, r)
+		if kind == "assets" {
+			b["approvalStatus"] = decode(S(r, "data"))["approvalStatus"]
+		}
+		if kind == "assets" && S(b, "category") != S(decode(S(r, "data")), "category") {
+			b["categoryAutoDetected"] = false
+			if !contains([]string{"Network endpoint", "Endpoint", "Computer", "Unknown", "Unclassified", ""}, S(b, "category")) {
+				b["serverCandidate"] = false
+			}
+		}
 		return out(200, a.update(u, r, b))
 	}
 	if action == "" && method == "DELETE" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		if kind == "organizations" && a.get("SELECT id FROM records WHERE org_id=? AND deleted IS NULL LIMIT 1", recordID) != nil {
 			fail(409, "Move or delete organization records first")
 		}
@@ -40,7 +75,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		return out(200, M{"ok": true})
 	}
 	if action == "restore" && method == "POST" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		a.validate(u, kind, decode(S(r, "data")), recordID)
 		a.run("UPDATE records SET deleted=NULL WHERE id=?", recordID)
 		a.audit(u, "restore", recordID, kind)
@@ -57,7 +92,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		return out(200, rows)
 	}
 	if action == "revert" && method == "POST" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		if contains([]string{"passwords", "purchases"}, kind) {
 			fail(400, "This record does not support version restore")
 		}
@@ -66,11 +101,17 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 			fail(404, "Version not found")
 		}
 		d := decode(S(version, "data"))
+		if kind == "assets" {
+			current := decode(S(r, "data"))
+			for _, key := range []string{"approvalStatus", "approvedAt", "approvedBy"} {
+				d[key] = current[key]
+			}
+		}
 		d["version"] = b["version"]
 		return out(200, a.update(u, r, d))
 	}
 	if action == "reveal" && method == "POST" {
-		if kind != "passwords" || !contains([]string{"admin", "editor"}, S(u, "role")) {
+		if kind != "passwords" || access(u, "passwords") != "edit" {
 			fail(403, "Vault access requires editor or administrator role")
 		}
 		if !checkPassword(S(b, "password"), S(u, "password")) || S(u, "mfa") != "" && !validOTP(fmt.Sprint(a.unseal(S(u, "mfa"))), S(b, "code")) {
@@ -93,7 +134,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		return out(200, M{"ok": true})
 	}
 	if action == "comments" && method == "POST" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		text := strings.TrimSpace(S(b, "body"))
 		if text == "" || len(text) > 5000 {
 			fail(400, "Enter a comment of up to 5000 characters")
@@ -103,7 +144,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		return out(201, M{"ok": true})
 	}
 	if action == "attachments" && method == "POST" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		name := S(b, "name")
 		if name == "" {
 			fail(400, "File name is required")
@@ -124,7 +165,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		return out(201, M{"ok": true})
 	}
 	if action == "purchase" && method == "POST" {
-		requireWrite(u)
+		a.recordWritable(u, r)
 		if kind != "purchases" {
 			fail(400, "Not a purchase order")
 		}

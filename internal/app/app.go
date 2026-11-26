@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base32"
 	"encoding/base64"
@@ -34,13 +35,18 @@ type Config struct {
 	SecureCookie                         bool
 }
 type App struct {
-	db       *sql.DB
-	key      []byte
-	mu       sync.Mutex
-	config   Config
-	zone     *time.Location
-	attempts map[string]attempt
-	pending  map[string]enrollment
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
+	backgroundWG     sync.WaitGroup
+	db               *sql.DB
+	key              []byte
+	mu               sync.Mutex
+	config           Config
+	zone             *time.Location
+	attempts         map[string]attempt
+	pending          map[string]enrollment
+	eventsMu         sync.Mutex
+	subscribers      map[chan struct{}]struct{}
 }
 type result struct {
 	status  int
@@ -75,7 +81,17 @@ func New(config Config) (*App, error) {
 		key, e = os.ReadFile(keyPath)
 		if errors.Is(e, os.ErrNotExist) {
 			key = random(32)
-			e = os.WriteFile(keyPath, key, 0600)
+			var file *os.File
+			file, e = os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if errors.Is(e, os.ErrExist) {
+				key, e = os.ReadFile(keyPath)
+			} else if e == nil {
+				_, e = file.Write(key)
+				closeErr := file.Close()
+				if e == nil {
+					e = closeErr
+				}
+			}
 		}
 	}
 	if e != nil {
@@ -84,7 +100,7 @@ func New(config Config) (*App, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("vault key must contain 32 bytes")
 	}
-	db, e := sql.Open("sqlite", DatabasePath(config.DataDir))
+	db, e := sql.Open("sqlite", filepath.Join(config.DataDir, "trinetra.sqlite"))
 	if e != nil {
 		return nil, e
 	}
@@ -101,14 +117,57 @@ func New(config Config) (*App, error) {
  CREATE TABLE IF NOT EXISTS comments(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,user_id TEXT NOT NULL,author TEXT NOT NULL,body TEXT NOT NULL,created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS favorites(user_id TEXT NOT NULL,record_id TEXT NOT NULL,PRIMARY KEY(user_id,record_id));
  CREATE TABLE IF NOT EXISTS api_tokens(id TEXT PRIMARY KEY,hash TEXT UNIQUE NOT NULL,user_id TEXT NOT NULL,name TEXT NOT NULL,created TEXT NOT NULL,expires INTEGER NOT NULL);
- CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);`)
+ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS collectors(id TEXT PRIMARY KEY,name TEXT NOT NULL,org_id TEXT NOT NULL,asset_id TEXT NOT NULL,user_id TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,created TEXT NOT NULL,expires INTEGER NOT NULL,last_seen TEXT);
+ CREATE TABLE IF NOT EXISTS proxmox_connections(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,config TEXT NOT NULL,sealed TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'Queued',summary TEXT NOT NULL DEFAULT '{}',last_sync TEXT,next_run INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS discovery_profiles(collector_id TEXT PRIMARY KEY,config TEXT NOT NULL,requested_at TEXT,last_scan_at TEXT,last_discovery_at TEXT,summary TEXT NOT NULL DEFAULT '{}');`)
 	if e != nil {
 		db.Close()
 		return nil, e
 	}
-	return &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}}, nil
+	columns, queryErr := db.Query("PRAGMA table_info(users)")
+	if queryErr != nil {
+		db.Close()
+		return nil, queryErr
+	}
+	hasPermissions := false
+	for columns.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var def any
+		if scanErr := columns.Scan(&cid, &name, &kind, &notNull, &def, &pk); scanErr != nil {
+			columns.Close()
+			db.Close()
+			return nil, scanErr
+		}
+		if name == "permissions" {
+			hasPermissions = true
+		}
+	}
+	columns.Close()
+	if !hasPermissions {
+		if _, migrationErr := db.Exec("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}'"); migrationErr != nil {
+			db.Close()
+			return nil, migrationErr
+		}
+	}
+
+	// Reclassify only collector-created process/port observations; keep IDs and links.
+	if _, migrationErr := db.Exec(`UPDATE records SET type='services' WHERE type='applications' AND json_extract(data,'$.collectorId') IS NOT NULL AND (json_extract(data,'$.sourceKey') LIKE 'app:%' OR json_extract(data,'$.sourceKey') LIKE 'service:%')`); migrationErr != nil {
+		db.Close()
+		return nil, migrationErr
+	}
+	// Previously unclassified local discovery records now require review.
+	if _, err := db.Exec(`UPDATE records SET data=json_set(data,'$.approvalStatus','Pending') WHERE type='assets' AND deleted IS NULL AND json_extract(data,'$.autoDiscovered')=1 AND json_extract(data,'$.category')='Network endpoint' AND json_extract(data,'$.approvalStatus') IS NULL`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel}
+	a.startProxmox()
+	return a, nil
 }
-func (a *App) Close() error { return a.db.Close() }
+func (a *App) Close() error { a.backgroundCancel(); a.backgroundWG.Wait(); return a.db.Close() }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
@@ -125,6 +184,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.FileServer(http.Dir(a.config.StaticDir)).ServeHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/api/events" {
+		a.serveEvents(w, r)
 		return
 	}
 	a.mu.Lock()
@@ -181,6 +244,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if transaction {
 		a.run("COMMIT")
 		transaction = false
+		a.broadcast()
 	}
 	for k, values := range result.headers {
 		for _, v := range values {
@@ -207,7 +271,7 @@ func (a *App) session(r *http.Request) (M, M, bool) {
 		}
 		return a.get("SELECT * FROM users WHERE id=? AND active=1", S(t, "user_id")), nil, true
 	}
-	cookie, e := r.Cookie("infraledger_session")
+	cookie, e := r.Cookie("trinetra_session")
 	if e != nil {
 		return nil, nil, false
 	}
@@ -221,7 +285,7 @@ func (a *App) createSession(u M) result {
 	rawToken, csrf := token(32), token(24)
 	a.run("DELETE FROM sessions WHERE expires<?", time.Now().UnixMilli())
 	a.run("INSERT INTO sessions VALUES(?,?,?,?)", digest(rawToken), S(u, "id"), csrf, time.Now().Add(8*time.Hour).UnixMilli())
-	cookie := (&http.Cookie{Name: "infraledger_session", Value: rawToken, Path: "/", HttpOnly: true, Secure: a.config.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: 28800}).String()
+	cookie := (&http.Cookie{Name: "trinetra_session", Value: rawToken, Path: "/", HttpOnly: true, Secure: a.config.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: 28800}).String()
 	return result{status: 200, body: M{"user": a.publicUser(u), "csrf": csrf}, headers: http.Header{"Set-Cookie": []string{cookie}}}
 }
 func (a *App) visible(u M, where string, args ...any) []M {
@@ -236,7 +300,7 @@ func (a *App) visible(u M, where string, args ...any) []M {
 func (a *App) route(req *http.Request, b M) result {
 	path, method := req.URL.Path, req.Method
 	if path == "/api/status" && method == "GET" {
-		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "InfraLedger", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
+		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "Trinetra IT", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
 	}
 	if path == "/api/setup" && method == "POST" {
 		if a.get("SELECT id FROM users LIMIT 1") != nil {
@@ -250,10 +314,15 @@ func (a *App) route(req *http.Request, b M) result {
 		a.run("INSERT INTO users(id,email,name,password,role,created) VALUES(?,?,?,?,?,?)", uid, strings.ToLower(S(b, "email")), strings.TrimSpace(S(b, "name")), hashPassword(S(b, "password")), "admin", timestamp())
 		u := a.get("SELECT * FROM users WHERE id=?", uid)
 		a.audit(u, "workspace_setup", "", "")
+		if S(b, "discoveryCIDR") != "" {
+			defaults := defaultDiscovery()
+			defaults["cidrs"] = []any{S(b, "discoveryCIDR")}
+			defaults = validateDiscovery(defaults)
+			a.run("INSERT OR REPLACE INTO meta(key,value) VALUES('discovery_defaults',?)", J(defaults))
+		}
 		if b["samples"] == true {
 			a.seed(u)
 		}
-		a.installGuide(u)
 		r := a.createSession(u)
 		r.status = 201
 		return r
@@ -280,6 +349,13 @@ func (a *App) route(req *http.Request, b M) result {
 		a.audit(u, "login", "", "")
 		return a.createSession(u)
 	}
+	if path == "/api/telemetry" && method == "POST" {
+		return a.telemetry(req, b)
+	}
+	if path == "/api/discovery/config" && method == "GET" {
+		collector, _, _ := a.collectorAuth(req)
+		return out(200, a.discoveryProfile(S(collector, "id")))
+	}
 	u, session, isAPI := a.session(req)
 	if u == nil {
 		fail(401, "Sign in required")
@@ -296,12 +372,21 @@ func (a *App) route(req *http.Request, b M) result {
 			fail(403, "API tokens may only read documentation records and exports")
 		}
 	}
+	if path == "/api/integrations/proxmox" || strings.HasPrefix(path, "/api/integrations/proxmox/") {
+		return a.proxmoxRoute(req, u, b)
+	}
+	if path == "/api/collectors" || strings.HasPrefix(path, "/api/collectors/") {
+		return a.collectorRoute(req, u, b)
+	}
+	if path == "/api/discovery" || strings.HasPrefix(path, "/api/discovery/") {
+		return a.discoveryRoute(req, u, b)
+	}
 	if path == "/api/me" && method == "GET" {
 		return out(200, M{"user": a.publicUser(u), "csrf": session["csrf"]})
 	}
 	if path == "/api/logout" && method == "POST" {
 		a.run("DELETE FROM sessions WHERE token=?", S(session, "token"))
-		return result{status: 200, body: M{"ok": true}, headers: http.Header{"Set-Cookie": []string{"infraledger_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"}}}
+		return result{status: 200, body: M{"ok": true}, headers: http.Header{"Set-Cookie": []string{"trinetra_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"}}}
 	}
 	if path == "/api/password" && method == "POST" {
 		if !checkPassword(S(b, "current"), S(u, "password")) {
@@ -322,7 +407,7 @@ func (a *App) route(req *http.Request, b M) result {
 		}
 		seed := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(random(20))
 		a.pending[S(u, "id")] = enrollment{Seed: seed, Expires: time.Now().Add(10 * time.Minute)}
-		return out(200, M{"seed": seed, "uri": "otpauth://totp/InfraLedger:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=InfraLedger"})
+		return out(200, M{"seed": seed, "uri": "otpauth://totp/Trinetra:" + url.PathEscape(S(u, "email")) + "?secret=" + seed + "&issuer=Trinetra"})
 	}
 	if path == "/api/mfa/confirm" && method == "POST" {
 		p, ok := a.pending[S(u, "id")]
@@ -341,6 +426,16 @@ func (a *App) route(req *http.Request, b M) result {
 		a.run("UPDATE users SET mfa=NULL WHERE id=?", S(u, "id"))
 		a.audit(u, "mfa_disabled", "", "")
 		return out(200, M{"ok": true})
+	}
+	if path == "/api/context" && method == "GET" {
+		orgs := []M{}
+		for _, o := range a.q("SELECT * FROM records WHERE type='organizations' AND deleted IS NULL") {
+			if withinOrgScope(u, o) {
+				d := decode(S(o, "data"))
+				orgs = append(orgs, M{"id": o["id"], "name": d["name"], "type": "organizations", "contextOnly": true})
+			}
+		}
+		return out(200, M{"organizations": orgs})
 	}
 	if path == "/api/records" && method == "GET" {
 		rows := a.visible(u, "deleted IS NULL")
@@ -365,7 +460,7 @@ func (a *App) route(req *http.Request, b M) result {
 		return out(201, a.insert(u, S(b, "type"), b))
 	}
 	if path == "/api/trash" && method == "GET" {
-		requireWrite(u)
+		requirePage(u, "trash", "view")
 		return out(200, a.visible(u, "deleted IS NOT NULL"))
 	}
 	if strings.HasPrefix(path, "/api/records/") {
@@ -392,19 +487,14 @@ func (a *App) route(req *http.Request, b M) result {
 			return result{status: 200, file: file["body"].([]byte), headers: http.Header{"Content-Type": []string{"application/octet-stream"}, "Content-Disposition": []string{"attachment; filename*=UTF-8''" + url.PathEscape(S(file, "name"))}}}
 		}
 		if method == "DELETE" {
-			requireWrite(u)
+			a.recordWritable(u, a.raw(u, S(file, "record_id"), false))
 			a.run("DELETE FROM attachments WHERE id=?", S(file, "id"))
 			a.audit(u, "attachment_delete", S(file, "record_id"), "")
 			return out(200, M{"ok": true})
 		}
 	}
-	if path == "/api/guide" && method == "POST" {
-		requireAdmin(u)
-		created, updated := a.installGuide(u)
-		a.audit(u, "guide_install", "", fmt.Sprintf("%d created, %d updated", created, updated))
-		return out(200, M{"created": created, "updated": updated, "organization": GuideOrganization})
-	}
 	if path == "/api/favorites" && method == "GET" {
+		requirePage(u, "favorites", "view")
 		outRows := []M{}
 		for _, r := range a.q("SELECT records.* FROM records JOIN favorites ON records.id=favorites.record_id WHERE favorites.user_id=? AND records.deleted IS NULL", S(u, "id")) {
 			if a.canRead(u, r) {
@@ -414,11 +504,26 @@ func (a *App) route(req *http.Request, b M) result {
 		return out(200, outRows)
 	}
 	if path == "/api/audit" && method == "GET" {
-		requireAdmin(u)
-		return out(200, a.q("SELECT * FROM audit ORDER BY id DESC LIMIT 1000"))
+		requirePage(u, "activity", "view")
+		rows := a.q("SELECT * FROM audit ORDER BY id DESC LIMIT 1000")
+		if S(u, "role") != "admin" {
+			filtered := []M{}
+			for _, event := range rows {
+				target := a.get("SELECT * FROM records WHERE id=?", S(event, "target"))
+				if S(event, "user_id") == S(u, "id") || a.canRead(u, target) {
+					filtered = append(filtered, event)
+				}
+			}
+			rows = filtered
+		}
+		return out(200, rows)
 	}
 	if path == "/api/users" {
-		requireAdmin(u)
+		if method == "GET" {
+			requirePage(u, "users", "view")
+		} else {
+			requireAdmin(u)
+		}
 		if method == "GET" {
 			rows := []M{}
 			for _, v := range a.q("SELECT * FROM users ORDER BY created") {
@@ -437,7 +542,7 @@ func (a *App) route(req *http.Request, b M) result {
 				fail(409, "Email is already in use")
 			}
 			uid := id()
-			a.run("INSERT INTO users(id,email,name,password,role,orgs,created) VALUES(?,?,?,?,?,?,?)", uid, strings.ToLower(S(b, "email")), S(b, "name"), hashPassword(S(b, "password")), S(b, "role"), J(orgs), timestamp())
+			a.run("INSERT INTO users(id,email,name,password,role,orgs,created,permissions) VALUES(?,?,?,?,?,?,?,?)", uid, strings.ToLower(S(b, "email")), S(b, "name"), hashPassword(S(b, "password")), S(b, "role"), J(orgs), timestamp(), J(validatePermissions(b["permissions"])))
 			a.audit(u, "user_created", uid, S(b, "role"))
 			return out(201, a.publicUser(a.get("SELECT * FROM users WHERE id=?", uid)))
 		}
@@ -461,14 +566,22 @@ func (a *App) route(req *http.Request, b M) result {
 		if b["active"] == true {
 			active = 1
 		}
-		a.run("UPDATE users SET role=?,orgs=?,active=? WHERE id=?", S(b, "role"), J(orgs), active, uid)
-		a.run("DELETE FROM sessions WHERE user_id=?", uid)
+		a.run("UPDATE users SET role=?,orgs=?,active=?,permissions=? WHERE id=?", S(b, "role"), J(orgs), active, J(validatePermissions(b["permissions"])), uid)
+		if uid == S(u, "id") {
+			a.run("DELETE FROM sessions WHERE user_id=? AND token<>?", uid, S(session, "token"))
+		} else {
+			a.run("DELETE FROM sessions WHERE user_id=?", uid)
+		}
 		a.run("DELETE FROM api_tokens WHERE user_id=?", uid)
 		a.audit(u, "user_access_changed", uid, "")
 		return out(200, M{"ok": true})
 	}
 	if path == "/api/tokens" {
-		requireAdmin(u)
+		if method == "GET" {
+			requirePage(u, "api-access", "view")
+		} else {
+			requirePage(u, "api-access", "edit")
+		}
 		if method == "GET" {
 			return out(200, a.q("SELECT id,name,created,expires FROM api_tokens WHERE user_id=?", S(u, "id")))
 		}
@@ -483,7 +596,7 @@ func (a *App) route(req *http.Request, b M) result {
 		}
 	}
 	if strings.HasPrefix(path, "/api/tokens/") && method == "DELETE" {
-		requireAdmin(u)
+		requirePage(u, "api-access", "edit")
 		tid := strings.TrimPrefix(path, "/api/tokens/")
 		a.run("DELETE FROM api_tokens WHERE id=? AND user_id=?", tid, S(u, "id"))
 		a.audit(u, "api_token_revoked", tid, "")
@@ -494,7 +607,7 @@ func (a *App) route(req *http.Request, b M) result {
 			fail(403, "Workspace export is unavailable for client accounts")
 		}
 		a.audit(u, "documentation_export", "", "")
-		return out(200, M{"format": "infraledger-documentation-v1", "exportedAt": timestamp(), "records": a.visible(u, "deleted IS NULL AND type<>'passwords'")})
+		return out(200, M{"format": "trinetra-documentation-v1", "exportedAt": timestamp(), "records": a.visible(u, "deleted IS NULL AND type<>'passwords'")})
 	}
 	if path == "/api/import" && method == "POST" {
 		requireWrite(u)
@@ -517,25 +630,12 @@ func (a *App) route(req *http.Request, b M) result {
 	return result{}
 }
 func (a *App) validateOrgs(u M, role string, orgs []string) {
-	if role == "client" && len(orgs) == 0 {
-		fail(400, "Assign at least one organization to a client")
+	if (role == "client" || role == "plant_it") && len(orgs) == 0 {
+		fail(400, "Assign at least one organization or plant to this role")
 	}
 	for _, oid := range orgs {
 		if S(a.raw(u, oid, false), "type") != "organizations" {
 			fail(400, "Select an organization")
 		}
 	}
-}
-
-// DatabasePath returns the SQLite file in dataDir. Workspaces created before the
-// rename to InfraLedger keep using their original trinetra.sqlite file.
-func DatabasePath(dataDir string) string {
-	legacy := filepath.Join(dataDir, "trinetra.sqlite")
-	current := filepath.Join(dataDir, "infraledger.sqlite")
-	if _, e := os.Stat(current); errors.Is(e, os.ErrNotExist) {
-		if _, e := os.Stat(legacy); e == nil {
-			return legacy
-		}
-	}
-	return current
 }

@@ -112,7 +112,12 @@ func (a *App) audit(u M, action, target, details string) {
 func (a *App) publicUser(u M) M {
 	var orgs []any
 	must(json.Unmarshal([]byte(S(u, "orgs")), &orgs))
-	return M{"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "orgs": orgs, "active": N(u, "active") == 1, "mfa": S(u, "mfa") != ""}
+	return M{"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "orgs": orgs, "active": N(u, "active") == 1, "mfa": S(u, "mfa") != "", "permissions": func() M {
+		if S(u, "permissions") != "" {
+			return decode(S(u, "permissions"))
+		}
+		return M{}
+	}(), "pageAccess": publicAccess(u)}
 }
 func (a *App) parsed(r M) M {
 	out := clone(r)
@@ -141,6 +146,9 @@ func (a *App) canRead(u, r M) bool {
 	if r == nil {
 		return false
 	}
+	if access(u, S(r, "type")) == "none" {
+		return false
+	}
 	if S(u, "role") == "admin" {
 		return true
 	}
@@ -167,9 +175,12 @@ func (a *App) canRead(u, r M) bool {
 	return true
 }
 func requireWrite(u M) {
-	if !contains([]string{"admin", "editor"}, S(u, "role")) {
-		fail(403, "Editor access required")
+	for _, page := range permissionPages {
+		if access(u, page) == "edit" {
+			return
+		}
 	}
+	fail(403, "Edit access required")
 }
 func requireAdmin(u M) {
 	if S(u, "role") != "admin" {
@@ -194,8 +205,8 @@ func (a *App) sameOrg(id, org, kind string) M {
 	return a.parsed(r)
 }
 
-var Types = []string{"organizations", "locations", "contacts", "assets", "passwords", "networks", "addresses", "ports", "racks", "diagrams", "articles", "procedures", "purchases", "vendors", "licenses", "domains", "certificates", "agreements", "templates"}
-var roles = []string{"admin", "editor", "viewer", "client"}
+var Types = []string{"services", "applications", "dependencies", "organizations", "locations", "contacts", "assets", "passwords", "networks", "addresses", "ports", "racks", "diagrams", "articles", "procedures", "purchases", "vendors", "licenses", "domains", "certificates", "agreements", "templates"}
+var roles = []string{"admin", "editor", "viewer", "client", "it_analyst", "plant_it", "user"}
 var emailPattern = regexp.MustCompile(`^\S+@\S+\.\S+$`)
 
 func prefix(cidr string) netip.Prefix {
@@ -230,7 +241,7 @@ func (a *App) validate(u M, kind string, input M, recordID string) M {
 	org := S(d, "orgId")
 	if org != "" {
 		r := a.get("SELECT * FROM records WHERE id=? AND type='organizations' AND deleted IS NULL", org)
-		if r == nil || !a.canRead(u, r) {
+		if r == nil || !withinOrgScope(u, r) {
 			fail(400, "Organization unavailable")
 		}
 	}
@@ -238,6 +249,24 @@ func (a *App) validate(u M, kind string, input M, recordID string) M {
 		d["visibility"] = "internal"
 	}
 	switch kind {
+	case "applications", "services":
+		a.sameOrg(S(d, "assetId"), org, "assets")
+		if S(d, "servicePort") != "" && (N(d, "servicePort") < 1 || N(d, "servicePort") > 65535 || float64(int(N(d, "servicePort"))) != N(d, "servicePort")) {
+			fail(400, "Port must be between 1 and 65535")
+		}
+	case "dependencies":
+		for _, k := range []string{"sourceId", "targetId"} {
+			endpoint := a.sameOrg(S(d, k), org, "")
+			if !contains([]string{"assets", "applications", "services"}, S(endpoint, "type")) {
+				fail(400, "A dependency endpoint must be a device or application")
+			}
+		}
+		if S(d, "sourceId") == S(d, "targetId") {
+			fail(400, "Choose two different dependency endpoints")
+		}
+		if S(d, "targetPort") != "" && (N(d, "targetPort") < 1 || N(d, "targetPort") > 65535 || float64(int(N(d, "targetPort"))) != N(d, "targetPort")) {
+			fail(400, "Port must be between 1 and 65535")
+		}
 	case "passwords":
 		if _, exists := d["password"]; exists {
 			if _, ok := d["password"].(string); !ok {
@@ -303,6 +332,12 @@ func (a *App) validate(u M, kind string, input M, recordID string) M {
 			}
 		}
 	case "assets":
+		if S(d, "hostId") != "" {
+			if S(d, "hostId") == recordID {
+				fail(400, "A device cannot host itself")
+			}
+			a.sameOrg(S(d, "hostId"), org, "assets")
+		}
 		if S(d, "ip") != "" {
 			if _, e := netip.ParseAddr(S(d, "ip")); e != nil {
 				fail(400, "Invalid IP address")
@@ -461,10 +496,18 @@ func (a *App) validate(u M, kind string, input M, recordID string) M {
 	return d
 }
 func (a *App) insert(u M, kind string, input M) M {
+	requirePage(u, kind, "edit")
 	if kind == "organizations" && S(u, "role") != "admin" && len(userOrgs(u)) > 0 {
 		fail(403, "Only an administrator can add organizations for a scoped account")
 	}
 	d := a.validate(u, kind, input, "")
+	if kind == "assets" {
+		if d["autoDiscovered"] == true || d["observed"] == true {
+			d["approvalStatus"] = "Pending"
+		} else {
+			d["approvalStatus"] = "Approved"
+		}
+	}
 	recordID := id()
 	if kind == "passwords" {
 		d["sealed"] = a.seal(M{"password": S(d, "password"), "totpSeed": S(d, "totpSeed")})
@@ -478,7 +521,7 @@ func (a *App) insert(u M, kind string, input M) M {
 	return a.safe(a.get("SELECT * FROM records WHERE id=?", recordID))
 }
 
-var linkKeys = []string{"rackId", "networkId", "assetId", "connectedAssetId", "locationId", "templateId", "vendorId", "purchaseId"}
+var linkKeys = []string{"hostId", "sourceId", "targetId", "rackId", "networkId", "assetId", "connectedAssetId", "locationId", "templateId", "vendorId", "purchaseId"}
 
 func linksTo(d M, target string) bool {
 	for _, k := range linkKeys {
@@ -489,6 +532,7 @@ func linksTo(d M, target string) bool {
 	return contains(strArray(d["relatedIds"]), target)
 }
 func (a *App) update(u, r, input M) M {
+	a.recordWritable(u, r)
 	if N(input, "version") != N(r, "version") {
 		fail(409, "This record changed. Reload it before saving")
 	}
