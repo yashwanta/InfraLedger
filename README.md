@@ -11,6 +11,18 @@
 
 A self-hosted IT documentation application built with **Go, React, TypeScript, and SQLite**. It includes a device/application/port dependency map with server-sent updates and an optional endpoint collector.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpg" alt="Workspace overview" width="900">
+</p>
+
+| Live dependency map | Rack management | Password vault |
+|---|---|---|
+| <img src="docs/screenshots/dependency-map.jpg" alt="Live dependency map"> | <img src="docs/screenshots/racks.jpg" alt="Rack management"> | <img src="docs/screenshots/passwords.jpg" alt="Password vault"> |
+
+<sub>Screenshots use the built-in fictional sample data (Acme Corporation).</sub>
+
 ## Run the Windows release
 
 1. Extract the entire Windows ZIP into a folder you control. Keep `trinetra.exe`, `collector.exe`, and `dist/` together.
