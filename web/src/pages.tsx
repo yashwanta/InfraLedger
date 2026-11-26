@@ -7,6 +7,8 @@ import { DiagramSvg } from './diagram';
 import { ImportForm, MfaForm, PasswordForm, Tokens, UserForm } from './dialogs';
 
 const PAGE_SIZE = 30;
+/** Matches GuideOrganization in internal/app/guide.go. */
+const HELP_ORGANIZATION = 'InfraLedger Help';
 const coreTypes = ['assets', 'articles', 'passwords', 'networks', 'contacts'];
 
 function coverage(app: AppCtx, org: Rec) {
@@ -36,7 +38,8 @@ function OrganizationTable({ rows }: { rows: Rec[] }) {
 export function Dashboard() {
   const app = useApp();
   const scoped = app.records.filter(app.inScope);
-  const orgs = app.ofType('organizations').filter(app.inScope);
+  // The built-in user guide's organization is not a client, so it is left out of client stats and coverage.
+  const orgs = app.ofType('organizations').filter(app.inScope).filter(o => o.name !== HELP_ORGANIZATION);
   const health = orgs.length ? Math.round(orgs.reduce((n, o) => n + coverage(app, o), 0) / orgs.length) : 0;
   const renewals = app.expirations();
   const articles = scoped.filter(r => r.type === 'articles');
