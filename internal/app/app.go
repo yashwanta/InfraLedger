@@ -50,6 +50,7 @@ type App struct {
 	attempts         map[string]attempt
 	pending          map[string]enrollment
 	failures         []failureEvent
+	lock             *os.File
 	setupCode        string
 	eventsMu         sync.Mutex
 	subscribers      map[chan struct{}]struct{}
@@ -82,8 +83,13 @@ func New(config Config) (*App, error) {
 	if e = restrictDataDir(config.DataDir); e != nil {
 		log.Printf("Warning: could not restrict permissions on %s: %v", config.DataDir, e)
 	}
+	lock, e := lockDataDir(config.DataDir)
+	if e != nil {
+		return nil, e
+	}
 	key, e := loadVaultKey(config.DataDir)
 	if e != nil {
+		lock.Close()
 		return nil, e
 	}
 	db, e := sql.Open("sqlite", filepath.Join(config.DataDir, "trinetra.sqlite"))
@@ -92,7 +98,7 @@ func New(config Config) (*App, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;
  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL,orgs TEXT NOT NULL DEFAULT '[]',active INTEGER NOT NULL DEFAULT 1,mfa TEXT,created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,type TEXT NOT NULL,org_id TEXT,data TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL,updated TEXT NOT NULL,deleted TEXT);
@@ -152,16 +158,30 @@ func New(config Config) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel}
+	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel, lock: lock}
+	if e := a.migrateVault(); e != nil {
+		cancel()
+		db.Close()
+		lock.Close()
+		return nil, e
+	}
 	if a.get("SELECT id FROM users LIMIT 1") == nil {
-		a.setupCode = strings.ToUpper(token(6))
+		a.setupCode = base32.StdEncoding.EncodeToString(random(5))
 		log.Printf("First-run setup code (needed only when setting up from another computer): %s", a.setupCode)
 	}
 	a.startProxmox()
 	a.startRemoteInventory()
 	return a, nil
 }
-func (a *App) Close() error { a.backgroundCancel(); a.backgroundWG.Wait(); return a.db.Close() }
+func (a *App) Close() error {
+	a.backgroundCancel()
+	a.backgroundWG.Wait()
+	e := a.db.Close()
+	if a.lock != nil {
+		a.lock.Close()
+	}
+	return e
+}
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.securityHeaders(w, r)
 	if !a.hostAllowed(r.Host) {
@@ -361,6 +381,7 @@ func (a *App) route(req *http.Request, b M) result {
 	if mutating && !isAPI && req.Header.Get("X-CSRF-Token") != S(session, "csrf") {
 		fail(403, "Session verification failed. Refresh and try again")
 	}
+	a.enforceMFA(u, path, method)
 	if isAPI {
 		if mutating {
 			fail(403, "API tokens are read-only")
@@ -368,6 +389,12 @@ func (a *App) route(req *http.Request, b M) result {
 		if path != "/api/export" && path != "/api/records" && !(strings.HasPrefix(path, "/api/records/") && strings.Count(path, "/") == 3) {
 			fail(403, "API tokens may only read documentation records and exports")
 		}
+	}
+	if path == "/api/settings/security" {
+		return a.securityRoute(req, u, b)
+	}
+	if strings.HasPrefix(path, "/api/trash/") {
+		return a.trashRoute(req, u, b)
 	}
 	if path == "/api/remote-inventory" || strings.HasPrefix(path, "/api/remote-inventory/") {
 		return a.remoteRoute(req, u, b)
@@ -460,7 +487,7 @@ func (a *App) route(req *http.Request, b M) result {
 	}
 	if path == "/api/records" && method == "POST" {
 		requireWrite(u)
-		return out(201, a.insert(u, S(b, "type"), b))
+		return out(201, a.insert(u, S(b, "type"), fromClient(S(b, "type"), b, nil)))
 	}
 	if path == "/api/trash" && method == "GET" {
 		requirePage(u, "trash", "view")
@@ -487,7 +514,7 @@ func (a *App) route(req *http.Request, b M) result {
 		a.raw(u, S(file, "record_id"), false)
 		if method == "GET" {
 			a.audit(u, "attachment_download", S(file, "record_id"), "")
-			return result{status: 200, file: file["body"].([]byte), headers: http.Header{"Content-Type": []string{"application/octet-stream"}, "Content-Disposition": []string{"attachment; filename*=UTF-8''" + url.PathEscape(S(file, "name"))}}}
+			return result{status: 200, file: a.unsealBytes(file["body"].([]byte)), headers: http.Header{"Content-Type": []string{"application/octet-stream"}, "Content-Disposition": []string{"attachment; filename*=UTF-8''" + url.PathEscape(S(file, "name"))}}}
 		}
 		if method == "DELETE" {
 			a.recordWritable(u, a.raw(u, S(file, "record_id"), false))
@@ -624,7 +651,7 @@ func (a *App) route(req *http.Request, b M) result {
 			if contains([]string{"passwords", "organizations", "templates"}, S(row, "type")) {
 				fail(400, "CSV import supports organization-owned records, excluding passwords")
 			}
-			created = append(created, a.insert(u, S(row, "type"), row))
+			created = append(created, a.insert(u, S(row, "type"), fromClient(S(row, "type"), row, nil)))
 		}
 		a.audit(u, "records_imported", "", fmt.Sprint(len(created)))
 		return out(201, M{"records": created})

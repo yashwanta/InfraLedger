@@ -112,7 +112,7 @@ func (a *App) audit(u M, action, target, details string) {
 func (a *App) publicUser(u M) M {
 	var orgs []any
 	must(json.Unmarshal([]byte(S(u, "orgs")), &orgs))
-	return M{"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "orgs": orgs, "active": N(u, "active") == 1, "mfa": S(u, "mfa") != "", "permissions": func() M {
+	return M{"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "orgs": orgs, "active": N(u, "active") == 1, "mfa": S(u, "mfa") != "", "mfaRequired": a.mfaRequired(u), "permissions": func() M {
 		if S(u, "permissions") != "" {
 			return decode(S(u, "permissions"))
 		}
@@ -516,7 +516,7 @@ func (a *App) insert(u M, kind string, input M) M {
 	}
 	time := timestamp()
 	a.run("INSERT INTO records(id,type,org_id,data,created,updated) VALUES(?,?,?,?,?,?)", recordID, kind, d["orgId"], J(d), time, time)
-	a.run("INSERT INTO versions VALUES(?,?,?,?,?)", recordID, 1, J(d), S(u, "name"), time)
+	a.run("INSERT INTO versions VALUES(?,?,?,?,?)", recordID, 1, J(historyCopy(d)), S(u, "name"), time)
 	a.audit(u, "create", recordID, kind)
 	return a.safe(a.get("SELECT * FROM records WHERE id=?", recordID))
 }
@@ -561,7 +561,14 @@ func (a *App) update(u, r, input M) M {
 	version := int(N(r, "version")) + 1
 	time := timestamp()
 	a.run("UPDATE records SET org_id=?,data=?,version=?,updated=? WHERE id=?", d["orgId"], J(d), version, time, S(r, "id"))
-	a.run("INSERT INTO versions VALUES(?,?,?,?,?)", S(r, "id"), version, J(d), S(u, "name"), time)
+	a.run("INSERT INTO versions VALUES(?,?,?,?,?)", S(r, "id"), version, J(historyCopy(d)), S(u, "name"), time)
 	a.audit(u, "update", S(r, "id"), S(r, "type"))
 	return a.safe(a.get("SELECT * FROM records WHERE id=?", S(r, "id")))
+}
+
+// historyCopy is what version history keeps: never the sealed secret.
+func historyCopy(d M) M {
+	c := clone(d)
+	delete(c, "sealed")
+	return c
 }

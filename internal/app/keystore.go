@@ -111,3 +111,24 @@ func ExportVaultKey(dataDir string) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(key), nil
 }
+
+func keyFilePath(dataDir string) string {
+	if keyProtectionAvailable {
+		return filepath.Join(dataDir, "vault.key.protected")
+	}
+	return filepath.Join(dataDir, "vault.key")
+}
+
+func encodeKeyFile(key []byte) ([]byte, error) {
+	if keyProtectionAvailable {
+		return protectKey(key)
+	}
+	return key, nil
+}
+
+func decodeKeyFile(data []byte) ([]byte, error) {
+	if keyProtectionAvailable {
+		return unprotectKey(data)
+	}
+	return checkKey(data)
+}

@@ -4,6 +4,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -60,4 +62,19 @@ func restrictDataDir(dir string) error {
 		return e
 	}
 	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// lockDataDir takes an exclusive lock so two servers (or a key rotation and a
+// running server) never use the same data folder at once.
+func lockDataDir(dir string) (*os.File, error) {
+	f, e := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDWR|os.O_CREATE, 0600)
+	if e != nil {
+		return nil, e
+	}
+	var overlapped windows.Overlapped
+	if e := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped); e != nil {
+		f.Close()
+		return nil, fmt.Errorf("data folder %s is in use by another InfraLedger process; stop it first", dir)
+	}
+	return f, nil
 }

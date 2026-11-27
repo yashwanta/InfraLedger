@@ -170,6 +170,7 @@ The default SQLite deployment serves a single application instance. API database
 - Sign-in takes the same time whether or not the email exists.
 - Changing the password or MFA revokes that user's API tokens as well as their sessions.
 - First-run setup from another computer requires the one-time setup code printed in the server window.
+- **Require MFA** (Setup → General settings → Sign-in security): administrators and anyone who can reveal vault credentials must set up an authenticator at their next sign-in before they can use InfraLedger. An administrator must have MFA on their own account before turning this on.
 
 ## Vault key, backups and recovery
 
@@ -187,7 +188,19 @@ Stop the server and back up the **entire data directory**, including the databas
 
 Session tokens are stored as hashes. Account passwords use PBKDF2-HMAC-SHA256 with 600,000 iterations and individual salts. Legacy scrypt password hashes from the earlier local prototype can be verified during migration. Database backups contain password hashes and encrypted credential history, so ordinary documentation exports are intentionally not a full backup.
 
-There is no email password-reset service or MFA recovery-code flow in this release. Keep a separate administrator account available before adopting MFA operationally. Soft-deleted records can be restored; the application does not expose permanent deletion.
+There is no email password-reset service or MFA recovery-code flow in this release. Keep a separate administrator account available before adopting MFA operationally. Deleted records go to the recycle bin and can be restored. Administrators can **Delete permanently** (one record) or **Empty recycle bin**; this also removes version history, attachments and comments, and SQLite `secure_delete` overwrites the freed pages. Version history never keeps old vault passwords.
+
+Attachments are encrypted with the vault key. Notes, articles and comments are not encrypted; keep secrets in Passwords.
+
+Browser requests may set only the fields shown in the record forms; discovery, approval and workflow fields are server-managed and cannot be set or changed by a client.
+
+**Rotate the vault key** (for example after a suspected exposure) with the server stopped:
+
+```
+trinetra.exe -data data -rotate-vault-key
+```
+
+Every stored secret, MFA seed, integration token and attachment is re-encrypted with a new key. Export a new recovery key afterwards; the old one no longer works. If rotation is interrupted after the database is updated, the next start finishes the switch automatically.
 
 A copied vault password is cleared from the clipboard after 45 seconds. Windows clipboard history (Win+V) may still keep a copy; turn it off on computers used for vault access.
 

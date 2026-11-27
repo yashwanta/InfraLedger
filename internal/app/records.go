@@ -14,7 +14,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 	if action == "" && method == "GET" {
 		outRecord := a.safe(r)
 		outRecord["favorite"] = a.get("SELECT user_id FROM favorites WHERE record_id=? AND user_id=?", recordID, S(u, "id")) != nil
-		outRecord["attachments"] = a.q("SELECT id,name,mime,created,length(body) AS size FROM attachments WHERE record_id=?", recordID)
+		outRecord["attachments"] = a.q("SELECT id,name,mime,created,"+attachmentSizeSQL+" AS size FROM attachments WHERE record_id=?", recordID)
 		outRecord["comments"] = []M{}
 		if S(u, "role") != "client" {
 			outRecord["comments"] = a.q("SELECT id,author,body,created FROM comments WHERE record_id=? ORDER BY created", recordID)
@@ -49,6 +49,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 	}
 	if action == "" && method == "PUT" {
 		a.recordWritable(u, r)
+		b = fromClient(kind, b, decode(S(r, "data")))
 		if kind == "assets" {
 			b["approvalStatus"] = decode(S(r, "data"))["approvalStatus"]
 		}
@@ -160,7 +161,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		if len(name) > 200 {
 			name = name[:200]
 		}
-		a.run("INSERT INTO attachments VALUES(?,?,?,?,?,?)", id(), recordID, name, S(b, "mime"), bytes, timestamp())
+		a.run("INSERT INTO attachments VALUES(?,?,?,?,?,?)", id(), recordID, name, S(b, "mime"), a.sealBytes(bytes), timestamp())
 		a.audit(u, "attachment_upload", recordID, "")
 		return out(201, M{"ok": true})
 	}

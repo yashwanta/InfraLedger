@@ -1,7 +1,7 @@
 export type AccessLevel='none'|'view'|'edit';
 export type Entity = 'services'|'applications'|'dependencies'|'organizations'|'locations'|'contacts'|'assets'|'passwords'|'networks'|'addresses'|'ports'|'racks'|'diagrams'|'articles'|'procedures'|'purchases'|'vendors'|'licenses'|'domains'|'certificates'|'agreements'|'templates';
 export type Role = 'admin'|'editor'|'viewer'|'client'|'it_analyst'|'plant_it'|'user';
-export interface User {id:string;name:string;email:string;role:Role;orgs:string[];active:boolean;mfa:boolean;permissions?:Record<string,AccessLevel>;pageAccess?:Record<string,AccessLevel>}
+export interface User {id:string;name:string;email:string;role:Role;orgs:string[];active:boolean;mfa:boolean;mfaRequired?:boolean;permissions?:Record<string,AccessLevel>;pageAccess?:Record<string,AccessLevel>}
 export interface Step {text:string;done:boolean}
 export interface Attachment {id:string;name:string;mime:string;size:number;created:string}
 export interface Comment {id:string;author:string;body:string;created:string}

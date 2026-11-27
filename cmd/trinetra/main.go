@@ -57,10 +57,18 @@ func main() {
 	certFile := flag.String("tls-cert", os.Getenv("TLS_CERT_FILE"), "TLS certificate (PEM) for HTTPS")
 	keyFile := flag.String("tls-key", os.Getenv("TLS_KEY_FILE"), "TLS private key (PEM) for HTTPS")
 	exportKey := flag.Bool("export-vault-key", false, "Print the vault recovery key and exit")
+	rotateKey := flag.Bool("rotate-vault-key", false, "Re-encrypt all secrets with a new vault key (server must be stopped) and exit")
 	showVersion := flag.Bool("version", false, "Print the version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if *rotateKey {
+		if e := app.RotateVaultKey(*data); e != nil {
+			log.Fatal(e)
+		}
+		fmt.Println("Vault key rotated. Export a new recovery key now with -export-vault-key; the previous recovery key no longer works.")
 		return
 	}
 	if *exportKey {
