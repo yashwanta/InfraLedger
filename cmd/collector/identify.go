@@ -20,6 +20,15 @@ var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$`)
 
 func identifyDevice(device *DiscoveredDevice, sshBanner, webTitle, serverHeader string) {
 	device.SSHBanner = sshBanner
+	// The server matches the page title and Server header against known
+	// network-device signatures; the collector only reports what it saw.
+	if webTitle != "" || serverHeader != "" {
+		device.WebTitle = webTitle
+		device.ServerHeader = serverHeader
+		if webTitle != "" {
+			device.IdentityEvidence = append(device.IdentityEvidence, "Web page title: "+webTitle)
+		}
+	}
 	lower := strings.ToLower(sshBanner)
 	if strings.Contains(lower, "debian") || strings.Contains(lower, "ubuntu") || strings.Contains(lower, "redhat") || strings.Contains(lower, "fedora") {
 		device.OS = "Linux"
@@ -66,29 +75,12 @@ func enrichNetworkScan(ctx context.Context, result *ScanResult) {
 							}
 						}
 					}
-					if port == 8006 {
+					if scheme := webPorts[port]; scheme != "" && (webTitle == "" || port == 8006) {
 						// Dedicated public identification request. Never sends credentials/cookies,
 						// follows redirects, or reuses this transport for authenticated operations.
-						transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, Proxy: nil}
-						client := http.Client{Transport: transport, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-						request, err := http.NewRequestWithContext(probeCtx, "GET", fmt.Sprintf("https://%s:8006/", device.IP), nil)
-						if err == nil {
-							if response, err := client.Do(request); err == nil {
-								body, _ := io.ReadAll(io.LimitReader(response.Body, 65536))
-								response.Body.Close()
-								if response.StatusCode == http.StatusOK {
-									match := titlePattern.FindSubmatch(body)
-									if len(match) > 1 {
-										webTitle = strings.TrimSpace(html.UnescapeString(string(match[1])))
-										if len(webTitle) > 300 {
-											webTitle = ""
-										}
-									}
-									serverHeader = response.Header.Get("Server")
-								}
-							}
+						if title, server := fetchWebIdentity(probeCtx, scheme, device.IP, port); title != "" || server != "" {
+							webTitle, serverHeader = title, server
 						}
-						transport.CloseIdleConnections()
 					}
 					cancel()
 				}
@@ -107,4 +99,35 @@ func enrichNetworkScan(ctx context.Context, result *ScanResult) {
 	}
 	close(jobs)
 	workers.Wait()
+}
+
+// webPorts are the management-interface ports whose landing page is read for identification.
+var webPorts = map[int]string{80: "http", 8080: "http", 443: "https", 8443: "https", 8006: "https"}
+
+// fetchWebIdentity reads the page title and Server header of an unauthenticated landing page.
+func fetchWebIdentity(ctx context.Context, scheme, ip string, port int) (title, server string) {
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, Proxy: nil}
+	defer transport.CloseIdleConnections()
+	client := http.Client{Transport: transport, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip, fmt.Sprint(port))), nil)
+	if err != nil {
+		return "", ""
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 65536))
+	response.Body.Close()
+	server = response.Header.Get("Server")
+	if len(server) > 200 {
+		server = server[:200]
+	}
+	if match := titlePattern.FindSubmatch(body); len(match) > 1 {
+		title = strings.Join(strings.Fields(html.UnescapeString(string(match[1]))), " ")
+		if len(title) > 300 {
+			title = ""
+		}
+	}
+	return title, server
 }

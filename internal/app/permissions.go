@@ -2,7 +2,7 @@ package app
 
 import "strings"
 
-var permissionPages = []string{"dashboard", "organizations", "favorites", "articles", "procedures", "passwords", "assets", "services", "applications", "dependencies", "discovery", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "networks", "addresses", "ports", "racks", "diagrams", "purchases", "vendors", "licenses", "domains", "certificates", "agreements", "locations", "contacts", "renewals", "reports", "trash", "settings", "users", "integrations", "api-access", "collectors", "templates", "activity"}
+var permissionPages = []string{"dashboard", "organizations", "favorites", "articles", "procedures", "passwords", "assets", "services", "applications", "dependencies", "discovery", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "network-tree", "networks", "addresses", "ports", "racks", "diagrams", "purchases", "vendors", "licenses", "domains", "certificates", "agreements", "locations", "contacts", "renewals", "reports", "trash", "settings", "users", "integrations", "api-access", "collectors", "templates", "activity"}
 
 func roleAccess(role, page string) string {
 	if role == "admin" {
@@ -12,7 +12,7 @@ func roleAccess(role, page string) string {
 		return "view"
 	}
 	if role == "client" {
-		if contains([]string{"dashboard", "organizations", "favorites", "articles", "procedures", "assets", "services", "applications", "dependencies", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "networks", "addresses", "ports", "racks", "diagrams", "licenses", "domains", "certificates", "agreements", "locations", "contacts", "renewals"}, page) {
+		if contains([]string{"dashboard", "organizations", "favorites", "articles", "procedures", "assets", "services", "applications", "dependencies", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "network-tree", "networks", "addresses", "ports", "racks", "diagrams", "licenses", "domains", "certificates", "agreements", "locations", "contacts", "renewals"}, page) {
 			return "view"
 		}
 		return "none"
@@ -22,7 +22,7 @@ func roleAccess(role, page string) string {
 	}
 	switch role {
 	case "editor", "it_analyst":
-		if contains([]string{"dashboard", "favorites", "renewals", "reports", "integrations", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "discovery"}, page) {
+		if contains([]string{"dashboard", "favorites", "renewals", "reports", "integrations", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "network-tree", "discovery"}, page) {
 			return "view"
 		}
 		return "edit"
@@ -30,7 +30,7 @@ func roleAccess(role, page string) string {
 		if contains([]string{"assets", "services", "applications", "dependencies", "networks", "addresses", "ports", "racks", "diagrams", "locations", "contacts", "articles", "procedures"}, page) {
 			return "edit"
 		}
-		if contains([]string{"dashboard", "organizations", "favorites", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "discovery", "renewals", "reports", "passwords", "licenses", "domains", "certificates", "agreements"}, page) {
+		if contains([]string{"dashboard", "organizations", "favorites", "application-map", "workstations", "servers", "virtual-machines", "dependency-map", "network-tree", "discovery", "renewals", "reports", "passwords", "licenses", "domains", "certificates", "agreements"}, page) {
 			return "view"
 		}
 		return "none"

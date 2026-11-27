@@ -10,7 +10,7 @@ import (
 )
 
 func defaultDiscovery() M {
-	return M{"enabled": true, "activeScan": false, "cidrs": []string{}, "ports": []int{22, 53, 80, 135, 139, 443, 445, 3389, 5432, 8006, 8080}, "intervalSeconds": 900}
+	return M{"enabled": true, "activeScan": false, "cidrs": []string{}, "ports": []int{22, 23, 53, 80, 135, 139, 443, 445, 631, 3389, 5432, 8006, 8080, 8291, 8443, 9100}, "intervalSeconds": 900}
 }
 func validateDiscovery(input M) M {
 	d := defaultDiscovery()
@@ -64,7 +64,7 @@ func validateDiscovery(input M) M {
 		}
 	}
 	if len(ports) == 0 {
-		for _, n := range []int{22, 53, 80, 135, 139, 443, 445, 3389, 5432, 8006, 8080} {
+		for _, n := range []int{22, 23, 53, 80, 135, 139, 443, 445, 631, 3389, 5432, 8006, 8080, 8291, 8443, 9100} {
 			ports = append(ports, n)
 		}
 	}
@@ -318,6 +318,7 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 		}
 		fields := M{"name": name, "ip": ip, "category": "Network endpoint", "status": "Discovered", "autoDiscovered": true, "discoverySource": source, "mac": S(observation, "mac")}
 		if asset == nil {
+			applyMACVendor(fields)
 			asset = upsert("assets", "remote:"+ip, fields)
 		} else {
 			raw := a.get("SELECT * FROM records WHERE id=?", S(asset, "id"))
@@ -332,6 +333,7 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 			if S(current, "mac") == "" {
 				current["mac"] = S(observation, "mac")
 			}
+			applyMACVendor(current)
 			if current["autoDiscovered"] == true {
 				current["status"] = "Discovered"
 			}
@@ -351,6 +353,23 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 	}
 	for _, n := range neighbors {
 		updateEndpoint(obj(n), "Neighbor cache")
+	}
+	for _, value := range interfaces {
+		gateway := S(obj(value), "gateway")
+		if gateway == "" || gateway == S(host, "ip") {
+			continue
+		}
+		if raw := a.findAsset(oid, gateway); raw != nil {
+			record := a.get("SELECT * FROM records WHERE id=?", S(raw, "id"))
+			current := decode(S(record, "data"))
+			before := J(current)
+			classify(current, "Router", "Default gateway of "+S(d, "name"))
+			current["defaultGateway"] = true
+			if J(current) != before {
+				current["version"] = record["version"]
+				a.observedUpdate(u, record, current)
+			}
+		}
 	}
 	scan := obj(snapshot["networkScan"])
 	profile := a.discoveryProfile(cid)
@@ -389,8 +408,36 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 		if len(evidence) > 10 || len(J(evidence)) > 10000 {
 			fail(400, "Device identity evidence is too large")
 		}
-		if len(evidence) > 0 {
-			identity["identificationEvidence"] = evidence
+		before := J(identity)
+		category, product := S(device, "deviceType"), S(device, "product")
+		if !contains(networkCategories, category) {
+			category, product = matchWebSignature(S(device, "webTitle"), S(device, "serverHeader"))
+		}
+		if category != "" {
+			source := S(device, "webTitle")
+			if source == "" {
+				source = S(device, "serverHeader")
+			}
+			classify(identity, category, "Web interface identifies "+product+" ("+source+")")
+			if product != "" && identity["categoryAutoDetected"] == true && S(identity, "category") == category {
+				identity["platform"] = product
+			}
+		}
+		for _, port := range A(device["openPorts"]) {
+			switch int(N(M{"p": port}, "p")) {
+			case 9100:
+				classify(identity, "Printer", "Raw printing port TCP 9100 (JetDirect) responds")
+			case 8291:
+				classify(identity, "Router", "MikroTik Winbox port TCP 8291 responds")
+				if identity["categoryAutoDetected"] == true && S(identity, "platform") == "" {
+					identity["platform"] = "MikroTik RouterOS"
+				}
+			}
+		}
+		if len(evidence) > 0 || J(identity) != before {
+			for _, item := range evidence {
+				addEvidence(identity, item)
+			}
 			identity["identityConfidence"] = "Unauthenticated service fingerprint"
 			identity["sshBanner"] = S(device, "sshBanner")
 			if S(device, "os") == "Linux" && contains([]string{"Network endpoint", "Endpoint", "Computer", "Unknown", "Unclassified", ""}, S(identity, "category")) {

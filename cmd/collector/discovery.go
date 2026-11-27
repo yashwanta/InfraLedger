@@ -45,6 +45,7 @@ type DiscoveredDevice struct {
 	Product          string   `json:"product,omitempty"`
 	SSHBanner        string   `json:"sshBanner,omitempty"`
 	WebTitle         string   `json:"webTitle,omitempty"`
+	ServerHeader     string   `json:"serverHeader,omitempty"`
 	IdentityEvidence []string `json:"identityEvidence,omitempty"`
 	IP               string   `json:"ip"`
 	Hostname         string   `json:"hostname,omitempty"`

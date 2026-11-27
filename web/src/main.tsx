@@ -1,4 +1,10 @@
 import {createRoot} from 'react-dom/client';
+import "@fontsource/michroma/400.css";
 import App from './App';
 import './style.css';
+import './dark.generated.css';
+import {initTheme} from './prefs';
+import {initLang} from './i18n';
+initTheme();
+initLang();
 createRoot(document.getElementById('root')!).render(<App/>);

@@ -172,8 +172,10 @@ func New(config Config) (*App, error) {
 		a.setupCode = base32.StdEncoding.EncodeToString(random(5))
 		log.Printf("First-run setup code (needed only when setting up from another computer): %s", a.setupCode)
 	}
+	a.migrateInternetEndpoints()
 	a.startProxmox()
 	a.startRemoteInventory()
+	a.startSNMPSweeps()
 	return a, nil
 }
 func (a *App) Close() error {

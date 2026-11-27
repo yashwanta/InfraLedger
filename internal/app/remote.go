@@ -101,6 +101,9 @@ func (a *App) remoteRoute(req *http.Request, u, b M) result {
 	}
 	rest := strings.Trim(strings.TrimPrefix(req.URL.Path, "/api/remote-inventory"), "/")
 	parts := strings.Split(rest, "/")
+	if rest == "snmp-sweep" {
+		return a.snmpRoute(req, u, b, rest)
+	}
 	switch {
 	case rest == "credentials" && req.Method == "GET":
 		rows := []M{}
@@ -125,6 +128,23 @@ func (a *App) remoteRoute(req *http.Request, u, b M) result {
 		}
 		if a.get("SELECT id FROM records WHERE id=? AND type='organizations' AND deleted IS NULL", org) == nil {
 			fail(400, "Select an organization")
+		}
+		if S(b, "kind") == "snmp" || previous != nil && S(decode(S(previous, "config")), "kind") == "snmp" {
+			config, secret := validateSNMPCredential(b)
+			sealed := ""
+			if len(secret) > 0 {
+				sealed = a.seal(secret)
+			} else if previous != nil {
+				old := decode(S(previous, "config"))
+				if S(old, "kind") != "snmp" || S(old, "snmpVersion") != S(config, "snmpVersion") || S(old, "username") != S(config, "username") {
+					fail(400, "Re-enter the SNMP secret when changing the version or user name")
+				}
+				sealed = S(previous, "sealed")
+			}
+			if sealed == "" {
+				fail(400, "Enter the community string or the SNMPv3 passwords")
+			}
+			return a.saveRemoteCredential(u, previous, cid, org, config, sealed)
 		}
 		config := validateRemoteCredential(b)
 		secret := M{}
@@ -159,13 +179,7 @@ func (a *App) remoteRoute(req *http.Request, u, b M) result {
 		if sealed == "" {
 			fail(400, "Enter a password or private key")
 		}
-		if previous == nil {
-			a.run("INSERT INTO remote_credentials(id,org_id,user_id,config,sealed,created) VALUES(?,?,?,?,?,?)", cid, org, u["id"], J(config), sealed, timestamp())
-		} else {
-			a.run("UPDATE remote_credentials SET user_id=?,config=?,sealed=? WHERE id=?", u["id"], J(config), sealed, cid)
-		}
-		a.audit(u, "remote_credential_saved", cid, S(config, "kind")+" credential "+S(config, "name"))
-		return out(200, publicRemoteCredential(a.get("SELECT * FROM remote_credentials WHERE id=?", cid)))
+		return a.saveRemoteCredential(u, previous, cid, org, config, sealed)
 	case len(parts) == 2 && parts[0] == "credentials" && req.Method == "DELETE":
 		requirePage(u, "integrations", "edit")
 		if a.get("SELECT id FROM remote_credentials WHERE id=?", parts[1]) == nil {
@@ -180,6 +194,9 @@ func (a *App) remoteRoute(req *http.Request, u, b M) result {
 		credential := a.get("SELECT * FROM remote_credentials WHERE id=?", S(b, "credentialId"))
 		if credential == nil {
 			fail(400, "Select a saved credential")
+		}
+		if S(decode(S(credential, "config")), "kind") == "snmp" {
+			fail(400, "SNMP credentials are used by the automatic network sweep. Use Run SNMP sweep instead")
 		}
 		ids := strArray(b["assetIds"])
 		if len(ids) == 0 || len(ids) > maxRemoteBatch {
@@ -226,6 +243,16 @@ func (a *App) remoteRoute(req *http.Request, u, b M) result {
 	}
 	fail(404, "Route not found")
 	return result{}
+}
+
+func (a *App) saveRemoteCredential(u, previous M, cid, org string, config M, sealed string) result {
+	if previous == nil {
+		a.run("INSERT INTO remote_credentials(id,org_id,user_id,config,sealed,created) VALUES(?,?,?,?,?,?)", cid, org, u["id"], J(config), sealed, timestamp())
+	} else {
+		a.run("UPDATE remote_credentials SET user_id=?,config=?,sealed=? WHERE id=?", u["id"], J(config), sealed, cid)
+	}
+	a.audit(u, "remote_credential_saved", cid, S(config, "kind")+" credential "+S(config, "name"))
+	return out(200, publicRemoteCredential(a.get("SELECT * FROM remote_credentials WHERE id=?", cid)))
 }
 
 func (a *App) startRemoteInventory() {

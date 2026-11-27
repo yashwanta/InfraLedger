@@ -270,6 +270,19 @@ func (a *App) telemetry(req *http.Request, b M) result {
 		if source == nil {
 			continue
 		}
+		if isInternetAddress(remote) {
+			// Public internet services are recorded on one Internet record, not as devices.
+			internet := a.internetNode(actor, oid)
+			key := fmt.Sprintf("internet:%s:%v:%s", S(source, "id"), port, strings.ToUpper(S(s, "protocol")))
+			previous := M{}
+			if r := existing[key]; r != nil {
+				previous = decode(S(r, "data"))
+			}
+			addresses, total := mergeAddresses(previous, remote)
+			upsert("dependencies", key, M{"name": fmt.Sprintf("%s → Internet :%v", process, port), "sourceId": source["id"], "targetId": internet["id"], "sourcePort": S(s, "localPort"), "targetPort": port, "protocol": strings.ToUpper(S(s, "protocol")), "status": "Observed", "purpose": "Connections to public internet services", "remoteAddresses": addresses, "remoteAddressCount": total})
+			count++
+			continue
+		}
 		var target M
 		if strings.HasPrefix(remote, "127.") || remote == "::1" {
 			target = listeners[fmt.Sprint(port)]
