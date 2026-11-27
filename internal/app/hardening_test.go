@@ -212,3 +212,27 @@ func TestPlainVaultKeyIsConvertedToProtectedStorage(t *testing.T) {
 		t.Fatal("recovery export mismatch", err)
 	}
 }
+
+func TestLoginLimitSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(Config{DataDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &apiClient{t: t, a: a}
+	c.call("POST", "/api/setup", M{"name": "Admin", "email": "admin@example.test", "password": "a-long-test-passphrase"})
+	bad := `{"email":"admin@example.test","password":"wrong-password-123"}`
+	for i := 0; i < loginPerAccount; i++ {
+		rawRequest(a, "POST", "/api/login", "127.0.0.1:5173", "10.9.9.9:1", bad)
+	}
+	a.Close()
+	b, err := New(Config{DataDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	good := `{"email":"admin@example.test","password":"a-long-test-passphrase"}`
+	if w := rawRequest(b, "POST", "/api/login", "127.0.0.1:5173", "10.9.9.8:1", good); w.Code != 429 {
+		t.Fatal("restart reset the sign-in limit:", w.Code)
+	}
+}

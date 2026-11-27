@@ -50,6 +50,7 @@ type App struct {
 	attempts         map[string]attempt
 	pending          map[string]enrollment
 	failures         []failureEvent
+	dirtyAttempts    map[string]bool
 	lock             *os.File
 	setupCode        string
 	eventsMu         sync.Mutex
@@ -110,6 +111,7 @@ func New(config Config) (*App, error) {
  CREATE TABLE IF NOT EXISTS favorites(user_id TEXT NOT NULL,record_id TEXT NOT NULL,PRIMARY KEY(user_id,record_id));
  CREATE TABLE IF NOT EXISTS api_tokens(id TEXT PRIMARY KEY,hash TEXT UNIQUE NOT NULL,user_id TEXT NOT NULL,name TEXT NOT NULL,created TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS auth_attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,reset INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS collectors(id TEXT PRIMARY KEY,name TEXT NOT NULL,org_id TEXT NOT NULL,asset_id TEXT NOT NULL,user_id TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,created TEXT NOT NULL,expires INTEGER NOT NULL,last_seen TEXT);
  CREATE TABLE IF NOT EXISTS proxmox_connections(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,config TEXT NOT NULL,sealed TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'Queued',summary TEXT NOT NULL DEFAULT '{}',last_sync TEXT,next_run INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS remote_credentials(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,config TEXT NOT NULL,sealed TEXT NOT NULL,created TEXT NOT NULL);
@@ -158,7 +160,8 @@ func New(config Config) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel, lock: lock}
+	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, dirtyAttempts: map[string]bool{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel, lock: lock}
+	a.loadAttempts()
 	if e := a.migrateVault(); e != nil {
 		cancel()
 		db.Close()

@@ -58,8 +58,7 @@ func (a *App) finishLogin(req *http.Request, b M) result {
 	if S(u, "mfa") != "" && !validOTP(fmt.Sprint(a.unseal(S(u, "mfa"))), S(b, "code")) {
 		reject("mfa_failed", "Enter a valid six-digit authenticator code")
 	}
-	delete(a.attempts, "ip:"+check.address)
-	delete(a.attempts, "acct:"+check.email)
+	a.clearAttempts("ip:"+check.address, "acct:"+check.email)
 	a.audit(u, "login", "", "from "+check.address)
 	return a.createSession(u)
 }

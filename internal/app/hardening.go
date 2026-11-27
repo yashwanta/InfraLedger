@@ -47,6 +47,7 @@ func (a *App) failed(key string) {
 		}
 		if len(a.attempts) >= maxTrackedBuckets {
 			a.attempts = map[string]attempt{}
+			a.db.Exec("DELETE FROM auth_attempts")
 		}
 	}
 	b := a.attempts[key]
@@ -55,6 +56,48 @@ func (a *App) failed(key string) {
 	}
 	b.Count++
 	a.attempts[key] = b
+	a.dirtyAttempts[key] = true
+}
+
+// clearAttempts forgets failures after a successful sign-in or re-entry.
+func (a *App) clearAttempts(keys ...string) {
+	for _, k := range keys {
+		if _, ok := a.attempts[k]; ok {
+			delete(a.attempts, k)
+			a.dirtyAttempts[k] = true
+		}
+	}
+}
+
+// Failure counters are saved so a restart does not reset the limits. They are
+// written after the request's transaction ends (a failed request rolls back).
+func (a *App) loadAttempts() {
+	now := time.Now()
+	a.db.Exec("DELETE FROM auth_attempts WHERE reset<?", now.UnixMilli())
+	rows, e := a.db.Query("SELECT key,count,reset FROM auth_attempts")
+	if e != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var count int
+		var reset int64
+		if rows.Scan(&key, &count, &reset) == nil {
+			a.attempts[key] = attempt{Count: count, Reset: time.UnixMilli(reset)}
+		}
+	}
+}
+
+func (a *App) saveAttempts() {
+	for key := range a.dirtyAttempts {
+		if b, ok := a.attempts[key]; ok {
+			a.db.Exec("INSERT OR REPLACE INTO auth_attempts(key,count,reset) VALUES(?,?,?)", key, b.Count, b.Reset.UnixMilli())
+		} else {
+			a.db.Exec("DELETE FROM auth_attempts WHERE key=?", key)
+		}
+	}
+	a.dirtyAttempts = map[string]bool{}
 }
 
 // clientAddress returns the caller's IP. X-Forwarded-For is honoured only when
@@ -169,6 +212,7 @@ func (a *App) flushFailures() {
 		a.db.Exec("INSERT INTO audit(user_id,actor,action,target,time,details) VALUES(?,?,?,?,?,?)", f.userID, f.actor, f.action, f.target, timestamp(), f.details)
 	}
 	a.failures = nil
+	a.saveAttempts()
 }
 
 // reauthenticate checks the password (and code when MFA is on) for sensitive
@@ -188,7 +232,7 @@ func (a *App) reauthenticate(r *http.Request, u M, password, code, action, targe
 		a.auditFailure(u, "", action+"_failed", target, "from "+a.clientAddress(r))
 		return false
 	}
-	delete(a.attempts, key)
+	a.clearAttempts(key)
 	return true
 }
 
@@ -201,7 +245,7 @@ func (a *App) securityHeaders(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), interest-cohort=()")
-	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	if r.TLS != nil || a.config.SecureCookie {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}

@@ -165,7 +165,7 @@ The default SQLite deployment serves a single application instance. API database
 
 ## Sign-in protection
 
-- Failed sign-ins are limited per source address (20) and per account (10) for 15 minutes. Password re-entry for revealing a credential, changing the password and MFA changes is limited to 5 failures per account.
+- Failed sign-ins are limited per source address (20) and per account (10) for 15 minutes. The counters are saved, so restarting the server does not reset them. Password re-entry for revealing a credential, changing the password and MFA changes is limited to 5 failures per account.
 - Failed sign-ins, failed MFA codes, failed reveals, failed setup codes and rate-limit hits are written to the audit log with the source address.
 - Sign-in takes the same time whether or not the email exists.
 - Changing the password or MFA revokes that user's API tokens as well as their sessions.
