@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
@@ -131,6 +133,7 @@ func main() {
 	interval := flag.Duration("interval", 30*time.Second, "Observation interval, minimum 5s")
 	discover := flag.Bool("discover", true, "Automatically discover host facts, interfaces and configured networks")
 	once := flag.Bool("once", false, "Send one snapshot and exit")
+	caFile := flag.String("ca", os.Getenv("TRINETRA_CA"), "PEM certificate to trust for the server (self-signed or internal CA)")
 	flag.Parse()
 	rawToken := os.Getenv("TRINETRA_TOKEN")
 	if rawToken == "" {
@@ -148,7 +151,19 @@ func main() {
 		log.Fatal("Minimum interval is 5 seconds")
 	}
 	origin.Path = "/api/telemetry"
-	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("collector redirects are disabled") }}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if *caFile != "" {
+		pem, e := os.ReadFile(*caFile)
+		if e != nil {
+			log.Fatal(e)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			log.Fatal("No PEM certificate found in ", *caFile)
+		}
+		tlsConfig.RootCAs = pool
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig, Proxy: http.ProxyFromEnvironment}, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("collector redirects are disabled") }}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	send := func() error {

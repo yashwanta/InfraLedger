@@ -3,7 +3,7 @@ let csrf='';
 export const setCSRF=(value:string)=>{csrf=value};
 export async function api<T=Record<string,unknown>>(path:string,method='GET',body?:unknown):Promise<T>{const response=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||'Request failed'),{status:response.status});return data as T}
 export interface Session {user:User;csrf:string}
-export interface Status {setupRequired:boolean;timeZone:string;backend:string;frontend:string}
+export interface Status {setupRequired:boolean;setupCodeRequired?:boolean;timeZone:string;backend:string;frontend:string}
 export const getRecords=async()=>{const [records,context]=await Promise.all([api<Item[]>('/records'),api<{organizations:Item[]}>('/context')]);return [...records,...context.organizations.filter(o=>!records.some(r=>r.id===o.id)).map(o=>({...o,version:0,created:'',updated:''}))]};
 export function download(content:string,name:string,type='application/json'){const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([content],{type}));link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}
 export const text=(value:unknown)=>value==null?'':String(value);

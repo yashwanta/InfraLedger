@@ -21,6 +21,7 @@ func TestSetupSeedsConnectedInfrastructure(t *testing.T) {
 	}
 	defer a.Close()
 	r := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewBufferString(`{"name":"Test Admin","email":"admin@example.test","password":"a-long-test-passphrase","samples":true}`))
+	r.RemoteAddr, r.Host = "127.0.0.1:40000", "127.0.0.1:5173"
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, r)

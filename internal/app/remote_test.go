@@ -168,6 +168,7 @@ func (c *apiClient) call(method, path string, body any) (int, M, []any) {
 		reader = bytes.NewReader(raw)
 	}
 	r := httptest.NewRequest(method, path, reader)
+	r.RemoteAddr, r.Host = "127.0.0.1:40000", "127.0.0.1:5173"
 	r.Header.Set("Content-Type", "application/json")
 	if c.cookie != "" {
 		r.Header.Set("Cookie", c.cookie)

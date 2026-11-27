@@ -4,13 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base32"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +31,12 @@ type enrollment struct {
 type Config struct {
 	DataDir, StaticDir, Origin, TimeZone string
 	SecureCookie                         bool
+	// TrustedProxy is the IP of a reverse proxy whose X-Forwarded-For is honoured.
+	TrustedProxy string
+	// AllowedHosts are extra host names accepted in the Host header.
+	AllowedHosts []string
+	// Version is stamped into the binary at build time.
+	Version string
 }
 type App struct {
 	backgroundCtx    context.Context
@@ -45,6 +49,8 @@ type App struct {
 	zone             *time.Location
 	attempts         map[string]attempt
 	pending          map[string]enrollment
+	failures         []failureEvent
+	setupCode        string
 	eventsMu         sync.Mutex
 	subscribers      map[chan struct{}]struct{}
 }
@@ -73,32 +79,12 @@ func New(config Config) (*App, error) {
 	if e = os.MkdirAll(config.DataDir, 0700); e != nil {
 		return nil, e
 	}
-	keyPath := filepath.Join(config.DataDir, "vault.key")
-	var key []byte
-	if value := os.Getenv("VAULT_KEY"); value != "" {
-		key, e = base64.StdEncoding.DecodeString(value)
-	} else {
-		key, e = os.ReadFile(keyPath)
-		if errors.Is(e, os.ErrNotExist) {
-			key = random(32)
-			var file *os.File
-			file, e = os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-			if errors.Is(e, os.ErrExist) {
-				key, e = os.ReadFile(keyPath)
-			} else if e == nil {
-				_, e = file.Write(key)
-				closeErr := file.Close()
-				if e == nil {
-					e = closeErr
-				}
-			}
-		}
+	if e = restrictDataDir(config.DataDir); e != nil {
+		log.Printf("Warning: could not restrict permissions on %s: %v", config.DataDir, e)
 	}
+	key, e := loadVaultKey(config.DataDir)
 	if e != nil {
 		return nil, e
-	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("vault key must contain 32 bytes")
 	}
 	db, e := sql.Open("sqlite", filepath.Join(config.DataDir, "trinetra.sqlite"))
 	if e != nil {
@@ -167,41 +153,44 @@ func New(config Config) (*App, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{db: db, key: key, zone: zone, config: config, attempts: map[string]attempt{}, pending: map[string]enrollment{}, backgroundCtx: ctx, backgroundCancel: cancel}
+	if a.get("SELECT id FROM users LIMIT 1") == nil {
+		a.setupCode = strings.ToUpper(token(6))
+		log.Printf("First-run setup code (needed only when setting up from another computer): %s", a.setupCode)
+	}
 	a.startProxmox()
 	a.startRemoteInventory()
 	return a, nil
 }
 func (a *App) Close() error { a.backgroundCancel(); a.backgroundWG.Wait(); return a.db.Close() }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "same-origin")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	a.securityHeaders(w, r)
+	if !a.hostAllowed(r.Host) {
+		http.Error(w, "Unknown host name. Add it to ALLOWED_HOSTS or APP_ORIGIN.", http.StatusMisdirectedRequest)
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.Error(w, "Method not allowed", 405)
 			return
 		}
-		if r.URL.Path == "/" {
-			http.ServeFile(w, r, filepath.Join(a.config.StaticDir, "index.html"))
-			return
-		}
-		http.FileServer(http.Dir(a.config.StaticDir)).ServeHTTP(w, r)
+		a.serveStatic(w, r)
 		return
 	}
 	if r.URL.Path == "/api/events" {
 		a.serveEvents(w, r)
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	transaction := false
+	locked, transaction := false, false
 	defer func() {
-		if p := recover(); p != nil {
-			if transaction {
-				a.db.Exec("ROLLBACK")
-			}
+		p := recover()
+		if p != nil && transaction {
+			a.db.Exec("ROLLBACK")
+		}
+		if locked {
+			a.flushFailures()
+			a.mu.Unlock()
+		}
+		if p != nil {
 			status, message := 500, "Internal error. Check the server log."
 			if e, ok := p.(apiError); ok {
 				status, message = e.Status, e.Message
@@ -230,19 +219,36 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			fail(415, "Use application/json")
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 9*1024*1024))
+		// The body is read before the global lock, so a slow client cannot
+		// stall other requests. Sign-in and account bodies are kept small.
+		limit := int64(largeBodyLimit)
+		if r.URL.Path == "/api/login" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/password" || strings.HasPrefix(r.URL.Path, "/api/mfa/") {
+			limit = smallBodyLimit
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 		if e := decoder.Decode(&body); e != nil && e != io.EOF {
 			var max *http.MaxBytesError
 			if errors.As(e, &max) {
-				fail(413, "Request exceeds 9 MB")
+				fail(413, fmt.Sprintf("Request exceeds %d KB", limit/1024))
 			}
 			fail(400, "Invalid JSON")
 		}
 		if body == nil {
 			fail(400, "Request body must be an object")
 		}
+	}
+	var login *loginCheck
+	if r.URL.Path == "/api/login" && r.Method == "POST" {
+		login = a.precheckLogin(r, body)
+	}
+	a.mu.Lock()
+	locked = true
+	if mutating {
 		a.run("BEGIN IMMEDIATE")
 		transaction = true
+	}
+	if login != nil {
+		r = r.WithContext(context.WithValue(r.Context(), loginKey{}, login))
 	}
 	result := a.route(r, body)
 	if transaction {
@@ -304,11 +310,16 @@ func (a *App) visible(u M, where string, args ...any) []M {
 func (a *App) route(req *http.Request, b M) result {
 	path, method := req.URL.Path, req.Method
 	if path == "/api/status" && method == "GET" {
-		return out(200, M{"setupRequired": a.get("SELECT id FROM users LIMIT 1") == nil, "name": "InfraLedger", "version": "1.0.0", "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
+		setupRequired := a.get("SELECT id FROM users LIMIT 1") == nil
+		return out(200, M{"setupRequired": setupRequired, "setupCodeRequired": setupRequired && !a.setupCodeValid(req, ""), "name": "InfraLedger", "version": a.version(), "timeZone": a.config.TimeZone, "backend": "Go", "frontend": "React + TypeScript"})
 	}
 	if path == "/api/setup" && method == "POST" {
 		if a.get("SELECT id FROM users LIMIT 1") != nil {
 			fail(409, "Workspace already initialized")
+		}
+		if !a.setupCodeValid(req, S(b, "setupCode")) {
+			a.auditFailure(nil, "", "setup_failed", "", "wrong setup code from "+a.clientAddress(req))
+			fail(403, "Enter the setup code shown in the InfraLedger server window")
 		}
 		if strings.TrimSpace(S(b, "name")) == "" || !emailPattern.MatchString(S(b, "email")) {
 			fail(400, "Enter your name and a valid email")
@@ -327,31 +338,13 @@ func (a *App) route(req *http.Request, b M) result {
 		if b["samples"] == true {
 			a.seed(u)
 		}
+		a.setupCode = ""
 		r := a.createSession(u)
 		r.status = 201
 		return r
 	}
 	if path == "/api/login" && method == "POST" {
-		address, _, _ := net.SplitHostPort(req.RemoteAddr)
-		bucket := a.attempts[address]
-		if time.Now().After(bucket.Reset) {
-			bucket = attempt{Reset: time.Now().Add(15 * time.Minute)}
-		}
-		if bucket.Count >= 10 {
-			fail(429, "Too many login attempts. Try again in 15 minutes")
-		}
-		bucket.Count++
-		a.attempts[address] = bucket
-		u := a.get("SELECT * FROM users WHERE email=? AND active=1", strings.ToLower(S(b, "email")))
-		if u == nil || !checkPassword(S(b, "password"), S(u, "password")) {
-			fail(401, "Invalid email or password")
-		}
-		if S(u, "mfa") != "" && !validOTP(fmt.Sprint(a.unseal(S(u, "mfa"))), S(b, "code")) {
-			fail(401, "Enter a valid six-digit authenticator code")
-		}
-		delete(a.attempts, address)
-		a.audit(u, "login", "", "")
-		return a.createSession(u)
+		return a.finishLogin(req, b)
 	}
 	if path == "/api/telemetry" && method == "POST" {
 		return a.telemetry(req, b)
@@ -396,12 +389,13 @@ func (a *App) route(req *http.Request, b M) result {
 		return result{status: 200, body: M{"ok": true}, headers: http.Header{"Set-Cookie": []string{"trinetra_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"}}}
 	}
 	if path == "/api/password" && method == "POST" {
-		if !checkPassword(S(b, "current"), S(u, "password")) {
+		if !a.reauthenticate(req, u, S(b, "current"), "", "password_change", "") {
 			fail(401, "Current password is incorrect")
 		}
 		strongPassword(S(b, "password"))
 		a.run("UPDATE users SET password=? WHERE id=?", hashPassword(S(b, "password")), S(u, "id"))
 		a.run("DELETE FROM sessions WHERE user_id=?", S(u, "id"))
+		a.run("DELETE FROM api_tokens WHERE user_id=?", S(u, "id"))
 		a.audit(u, "password_change", "", "")
 		return a.createSession(u)
 	}
@@ -409,7 +403,7 @@ func (a *App) route(req *http.Request, b M) result {
 		if S(u, "mfa") != "" {
 			fail(409, "MFA is already enabled")
 		}
-		if !checkPassword(S(b, "password"), S(u, "password")) {
+		if !a.reauthenticate(req, u, S(b, "password"), "", "mfa_start", "") {
 			fail(401, "Password is incorrect")
 		}
 		seed := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(random(20))
@@ -422,15 +416,17 @@ func (a *App) route(req *http.Request, b M) result {
 			fail(400, "Invalid or expired authenticator code")
 		}
 		a.run("UPDATE users SET mfa=? WHERE id=?", a.seal(p.Seed), S(u, "id"))
+		a.run("DELETE FROM api_tokens WHERE user_id=?", S(u, "id"))
 		delete(a.pending, S(u, "id"))
 		a.audit(u, "mfa_enabled", "", "")
 		return out(200, M{"ok": true})
 	}
 	if path == "/api/mfa/disable" && method == "POST" {
-		if S(u, "mfa") == "" || !checkPassword(S(b, "password"), S(u, "password")) || !validOTP(fmt.Sprint(a.unseal(S(u, "mfa"))), S(b, "code")) {
+		if S(u, "mfa") == "" || !a.reauthenticate(req, u, S(b, "password"), S(b, "code"), "mfa_disable", "") {
 			fail(401, "Password or authenticator code is incorrect")
 		}
 		a.run("UPDATE users SET mfa=NULL WHERE id=?", S(u, "id"))
+		a.run("DELETE FROM api_tokens WHERE user_id=?", S(u, "id"))
 		a.audit(u, "mfa_disabled", "", "")
 		return out(200, M{"ok": true})
 	}

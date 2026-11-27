@@ -145,27 +145,51 @@ Browser QA confirmed React login, cross-tab dependency updates, application port
 
 | Setting | Default / meaning |
 |---|---|
-| `-addr` / `LISTEN_ADDR` | `127.0.0.1:5173` |
+| `-addr` / `LISTEN_ADDR` | `127.0.0.1:5173` (this computer only) |
 | `-data` / `DATA_DIR` | `data` |
 | `-static` / `STATIC_DIR` | `dist` |
+| `-tls-cert`, `-tls-key` / `TLS_CERT_FILE`, `TLS_KEY_FILE` | PEM certificate and key; the server then speaks HTTPS only, marks cookies Secure and sends HSTS |
 | `APP_TIMEZONE` | `America/New_York` |
 | `APP_ORIGIN` | Explicit public origin when behind a reverse proxy |
-| `COOKIE_SECURE` | Set `1` when serving through HTTPS |
-| `VAULT_KEY` | Optional base64-encoded 32-byte key supplied from a secret manager; otherwise `data/vault.key` is created |
+| `COOKIE_SECURE` | Set `1` when an HTTPS reverse proxy is in front |
+| `TRUSTED_PROXY` | IP address of that reverse proxy; only then is `X-Forwarded-For` used for sign-in limits and audit |
+| `ALLOWED_HOSTS` | Extra host names (comma-separated) accepted in the `Host` header. IP addresses, `localhost`, this computer's name and the `APP_ORIGIN` host are always accepted; anything else is rejected to stop DNS-rebinding |
+| `VAULT_KEY` | Optional base64-encoded 32-byte key supplied from a secret manager |
+| `ALLOW_INSECURE_HTTP` | Set `1` only on an isolated test network to allow plain HTTP on a non-loopback address |
 
-For remote access, place the loopback Go server behind an HTTPS reverse proxy, set `APP_ORIGIN` to the exact public origin and `COOKIE_SECURE=1`, and allow streaming on `/api/events` with buffering disabled. A sample `deploy/Caddyfile` is included. Public hosting, DNS, certificates and reverse-proxy installation have not been configured automatically.
+The server **refuses to start with plain HTTP on a network address**. To use InfraLedger from other computers, either start it with `-tls-cert`/`-tls-key`, or keep it on `127.0.0.1` behind an HTTPS reverse proxy with `APP_ORIGIN`, `COOKIE_SECURE=1` and `TRUSTED_PROXY` set, and allow streaming on `/api/events` with buffering disabled. A sample `deploy/Caddyfile` is included. Collectors on other computers require HTTPS; for a self-signed or internal-CA certificate pass `-ca server-ca.pem` (or `TRINETRA_CA`) to the collector.
 
-The default SQLite deployment serves a single application instance. API database work is serialized to keep multi-record validation and transaction behavior consistent. This is suitable for a small self-hosted deployment; large-scale or multi-instance deployment needs further architecture and load testing.
+`trinetra.exe -version` prints the commit the binary was built from; `Build.ps1` stamps it, runs `npm audit` and (when installed) `govulncheck`, and writes `outputs/SHA256SUMS.txt`.
 
-## Backups and recovery
+The default SQLite deployment serves a single application instance. API database work is serialized to keep multi-record validation and transaction behavior consistent. Request bodies are read before that lock and sign-in bodies are limited to 64 KB, so a slow client cannot stall other users. This is suitable for a small self-hosted deployment; large-scale or multi-instance deployment needs further architecture and load testing.
 
-Stop the server and back up the **entire data directory**, including the database, any SQLite WAL/SHM files, and `vault.key`. The database contains attachments, revisions and audit history. Protect the backup and data folder with filesystem permissions and encryption appropriate to your environment. Windows filesystem ACLs are inherited; Unix key-file permissions are set to owner-only.
+## Sign-in protection
 
-Restore the complete data directory into the configured data path while the server is stopped. If `VAULT_KEY` was supplied through the environment, restore that same secret from your secret manager. Losing the key makes vault secrets and MFA seeds unrecoverable. The key file and database are stored on the same server by default; this is server-managed encryption, not zero-knowledge encryption.
+- Failed sign-ins are limited per source address (20) and per account (10) for 15 minutes. Password re-entry for revealing a credential, changing the password and MFA changes is limited to 5 failures per account.
+- Failed sign-ins, failed MFA codes, failed reveals, failed setup codes and rate-limit hits are written to the audit log with the source address.
+- Sign-in takes the same time whether or not the email exists.
+- Changing the password or MFA revokes that user's API tokens as well as their sessions.
+- First-run setup from another computer requires the one-time setup code printed in the server window.
+
+## Vault key, backups and recovery
+
+On Windows the vault key is stored as `vault.key.protected`, encrypted with Windows DPAPI for the account that runs InfraLedger. An older plain `vault.key` is converted automatically on first start and then deleted. On start the data folder is restricted to that account, SYSTEM and Administrators. A copy of the data folder alone therefore cannot decrypt the vault on another computer or account.
+
+**Export a recovery key once and store it offline**, separate from the database backups:
+
+```
+trinetra.exe -data data -export-vault-key
+```
+
+To restore on a different computer or Windows account, restore the data folder and start InfraLedger once with the environment variable `VAULT_KEY` set to the recovery key. Losing both the protected key file (or the Windows account) and the recovery key makes vault secrets and MFA seeds unrecoverable. On Linux the key stays in `vault.key` with owner-only permissions; supply it through `VAULT_KEY` from a secret manager for stronger separation.
+
+Stop the server and back up the **entire data directory**, including the database and any SQLite WAL/SHM files. The database contains attachments, revisions and audit history. This is server-managed encryption, not zero-knowledge encryption.
 
 Session tokens are stored as hashes. Account passwords use PBKDF2-HMAC-SHA256 with 600,000 iterations and individual salts. Legacy scrypt password hashes from the earlier local prototype can be verified during migration. Database backups contain password hashes and encrypted credential history, so ordinary documentation exports are intentionally not a full backup.
 
 There is no email password-reset service or MFA recovery-code flow in this release. Keep a separate administrator account available before adopting MFA operationally. Soft-deleted records can be restored; the application does not expose permanent deletion.
+
+A copied vault password is cleared from the clipboard after 45 seconds. Windows clipboard history (Win+V) may still keep a copy; turn it off on computers used for vault access.
 
 ## REST API
 
@@ -192,7 +216,7 @@ The package contains no user database, vault key, preconfigured account, collect
 
 ## Upgrade notes for discovery and page permissions
 
-Stop the existing server before replacing its executable, and back up the complete data directory. Replace the binaries and `dist/`, keep the existing database and `vault.key`, then restart. The server adds discovery-profile storage and the user permissions column automatically. It does not reset accounts, change existing administrator roles, or remove documentation. Existing administrators are labeled IT Admin. Review access defaults and assign plants before creating new Plant IT accounts.
+Stop the existing server before replacing its executable, and back up the complete data directory. Replace the binaries and `dist/`, keep the existing data folder (database and vault key), then restart. On first start a plain `vault.key` is converted to `vault.key.protected`; export a recovery key afterwards. The server adds discovery-profile storage and the user permissions column automatically. It does not reset accounts, change existing administrator roles, or remove documentation. Existing administrators are labeled IT Admin. Review access defaults and assign plants before creating new Plant IT accounts.
 
 
 ## Hardware, software, and services

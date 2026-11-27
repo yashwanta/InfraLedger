@@ -114,7 +114,7 @@ func (a *App) recordRoute(req *http.Request, u, r M, action string, b M) result 
 		if kind != "passwords" || access(u, "passwords") != "edit" {
 			fail(403, "Vault access requires editor or administrator role")
 		}
-		if !checkPassword(S(b, "password"), S(u, "password")) || S(u, "mfa") != "" && !validOTP(fmt.Sprint(a.unseal(S(u, "mfa"))), S(b, "code")) {
+		if !a.reauthenticate(req, u, S(b, "password"), S(b, "code"), "secret_reveal", recordID) {
 			fail(401, "Reauthentication failed")
 		}
 		a.audit(u, "secret_reveal", recordID, "")
