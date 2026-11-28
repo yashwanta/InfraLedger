@@ -116,6 +116,7 @@
 :root[data-theme=dark] .rack-device .lights {color: #9be2b1}
 :root[data-theme=dark] .rack-foot {color: #74818c}
 :root[data-theme=dark] .diagram-wrap {background-color: #282828;background-image: radial-gradient(#374044 1px,transparent 1px)}
+:root[data-theme=dark] .graph-controls {background: #282828}
 :root[data-theme=dark] .diagram-canvas .node.selected rect {stroke: #20a285}
 :root[data-theme=dark] .diagram-canvas .node rect {fill: #282828;stroke: #414f54}
 :root[data-theme=dark] .diagram-canvas .node text {fill: #426174}
@@ -282,3 +283,31 @@
 :root[data-theme=dark] .tone-printer .tree-accent,:root[data-theme=dark] .dot.tone-printer {fill: #8b5cc4;background: #8b5cc4}
 :root[data-theme=dark] .tone-device .tree-accent,:root[data-theme=dark] .dot.tone-device {fill: #676a71;background: #676a71}
 :root[data-theme=dark] .tone-org>rect:first-child,:root[data-theme=dark] .tone-subnet>rect:first-child {fill: #1e1e23}
+:root[data-theme=dark] .tone-iot .tree-accent,:root[data-theme=dark] .dot.tone-iot {fill: #d9822b;background: #d9822b}
+:root[data-theme=dark] .diagram-canvas .node>rect.node-card {fill: #282828;stroke: #3a3b41}
+:root[data-theme=dark] .diagram-canvas .node:hover>rect.node-card {stroke: #585a61}
+:root[data-theme=dark] .diagram-canvas .node.selected>rect.node-card {stroke: #c3182f}
+:root[data-theme=dark] .diagram-canvas .node .node-label {fill: #c7c9ce}
+:root[data-theme=dark] .diagram-canvas .node .node-sub {fill: #888b90}
+:root[data-theme=dark] .diagram-canvas .node-linked {fill: #1f9d6b}
+:root[data-theme=dark] .diagram-canvas .edge path {stroke: #5c5e66}
+:root[data-theme=dark] .diagram-canvas .edge.active path {stroke: #c3182f}
+:root[data-theme=dark] .diagram-canvas .edge text {fill: #989a9f;stroke: #282828}
+:root[data-theme=dark] .diagram-canvas .edge-arrow {fill: #72747b}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-net {fill: #1c2936}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-net {stroke: #3b82c4}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-gw {fill: #33181b}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-gw {stroke: #c3182f}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-sw {fill: #1e2735}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-sw {stroke: #2f74c0}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-srv {fill: #27282e}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-srv {stroke: #a2a5ab}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-ws {fill: #243734}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-ws {stroke: #139a8a}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-svc {fill: #231b30}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-svc {stroke: #8b5cc4}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-iot {fill: #392919}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-iot {stroke: #d9822b}
+:root[data-theme=dark] .diagram-canvas .node rect.node-tile.tone-dev {fill: #26272a}
+:root[data-theme=dark] .diagram-canvas .node-icon.tone-dev {stroke: #8d8f93}
+:root[data-theme=dark] .record-page {background: #282828}

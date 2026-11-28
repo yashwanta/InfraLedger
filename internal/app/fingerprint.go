@@ -160,3 +160,110 @@ func applyMACVendor(d M) {
 		classify(d, "Network device", "MAC address registered to "+vendor)
 	}
 }
+
+// Categories for devices found by the local network sweep.
+const (
+	categoryMedia  = "TV / media device"
+	categoryIoT    = "IoT device"
+	categoryCamera = "Camera"
+	categoryPhone  = "Phone / tablet"
+)
+
+// vendorCategories classify by MAC manufacturer when nothing more specific is known.
+var vendorCategories = []struct{ match, category string }{
+	{"espressif", categoryIoT}, {"tuya", categoryIoT}, {"shelly", categoryIoT}, {"allterco", categoryIoT}, {"signify", categoryIoT},
+	{"philips lighting", categoryIoT}, {"wyze", categoryIoT}, {"irobot", categoryIoT}, {"ecobee", categoryIoT}, {"nest labs", categoryIoT},
+	{"lifx", categoryIoT}, {"belkin", categoryIoT}, {"ring llc", categoryCamera}, {"amazon technologies", categoryIoT}, {"roborock", categoryIoT}, {"ecovacs", categoryIoT}, {"nintendo", categoryMedia}, {"sony interactive", categoryMedia}, {"sonoff", categoryIoT}, {"itead", categoryIoT},
+	{"roku", categoryMedia}, {"sonos", categoryMedia}, {"vizio", categoryMedia}, {"hisense", categoryMedia}, {"tcl", categoryMedia},
+	{"hikvision", categoryCamera}, {"dahua", categoryCamera}, {"axis communications", categoryCamera}, {"reolink", categoryCamera}, {"amcrest", categoryCamera},
+	{"synology", "Storage"}, {"qnap", "Storage"}, {"asustor", "Storage"}, {"terramaster", "Storage"}, {"buffalo", "Storage"}, {"western digital", "Storage"},
+	{"proxmox server solutions", "Virtual machine"}, {"arcadyan", "Router"}, {"sagemcom", "Router"}, {"technicolor", "Router"}, {"netgear", "Network device"},
+	{"brother", "Printer"}, {"seiko epson", "Printer"}, {"xerox", "Printer"}, {"lexmark", "Printer"}, {"kyocera", "Printer"}, {"ricoh", "Printer"},
+}
+
+// describeLocalDevice records what a device announced about itself (mDNS,
+// UPnP, reverse DNS) and classifies it. Announced services are strong
+// evidence; a manufacturer name alone only labels unclassified devices.
+func describeLocalDevice(d, obs M) {
+	services := []string{}
+	for _, s := range strArray(obs["services"]) {
+		if len(services) < 12 && len(s) <= 120 {
+			services = append(services, strings.ToLower(s))
+		}
+	}
+	if len(services) > 0 {
+		d["advertisedServices"] = services
+	}
+	for key, field := range map[string]string{"friendlyName": "advertisedName", "upnpType": "upnpDeviceType"} {
+		if v := clip(S(obs, key), 150); v != "" {
+			d[field] = v
+		}
+	}
+	if v := clip(S(obs, "model"), 120); v != "" && (S(d, "model") == "" || d["modelFromDiscovery"] == true) {
+		d["model"], d["modelFromDiscovery"] = v, true
+	}
+	if v := clip(S(obs, "manufacturer"), 120); v != "" && (S(d, "manufacturer") == "" || d["manufacturerFromMAC"] == true) {
+		d["manufacturer"] = shortVendor(v)
+		delete(d, "manufacturerFromMAC")
+	}
+	for _, e := range strArray(obs["identityEvidence"]) {
+		if len(e) <= 300 {
+			addEvidence(d, e)
+		}
+	}
+	has := func(names ...string) string {
+		for _, s := range services {
+			for _, n := range names {
+				if strings.Contains(s, n) {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	upnp := strings.ToLower(S(obs, "upnpType"))
+	text := strings.ToLower(strings.Join([]string{S(obs, "friendlyName"), S(obs, "model"), S(obs, "manufacturer"), S(obs, "hostname"), S(d, "macVendor")}, " "))
+	mentions := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(text, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("_ipp._tcp", "_ipps._tcp", "_printer._tcp", "_pdl-datastream._tcp") != "" || strings.Contains(upnp, "printer"):
+		classify(d, "Printer", "Announces a printing service")
+	case mentions("diskstation", "rackstation", "synology", "qnap", "truenas", "readynas", "unraid", "asustor", "terramaster") || strings.Contains(upnp, "nas"):
+		classify(d, "Storage", "Identifies itself as network storage (NAS)")
+	case strings.Contains(upnp, "internetgatewaydevice"):
+		classify(d, "Router", "UPnP Internet gateway device")
+	case strings.Contains(upnp, "camera") || mentions("ipcam", "ip camera", "hikvision", "reolink", "dahua"):
+		classify(d, categoryCamera, "Identifies itself as a network camera")
+	case has("_googlecast._tcp", "_amzn-wplay._tcp", "_androidtvremote2._tcp", "_sonos._tcp", "_spotify-connect._tcp", "upnp:roku", "dial-multiscreen") != "" ||
+		strings.Contains(upnp, "mediarenderer") || mentions("appletv", "apple tv", "bravia", "webos", "tizen", "smart tv", "roku", "chromecast", "fire tv", "sonos"):
+		classify(d, categoryMedia, "Announces media streaming ("+firstNonEmpty(has("_googlecast", "_amzn", "_androidtv", "_sonos", "_spotify", "roku", "dial"), upnp, "device name")+")")
+	case has("_hap._tcp", "_homekit._tcp", "_matter._tcp", "_hue._tcp", "_esphomelib._tcp", "_shelly._tcp", "_miio._udp", "_meshcop._udp", "_elg._tcp") != "":
+		classify(d, categoryIoT, "Announces a smart-home service ("+has("_hap", "_homekit", "_matter", "_hue", "_esphome", "_shelly", "_miio", "_meshcop", "_elg")+")")
+	case has("_apple-mobdev2._tcp") != "" || mentions("iphone", "ipad", "android", "galaxy-", "pixel-"):
+		classify(d, categoryPhone, "Identifies itself as a phone or tablet")
+	case mentions("macbook"):
+		classify(d, "Laptop", "Apple laptop model announced over mDNS")
+	case mentions("imac", "macmini", "mac mini", "macpro", "mac studio"):
+		classify(d, "Desktop", "Apple desktop model announced over mDNS")
+	case has("_workstation._tcp", "_companion-link._tcp") != "":
+		classify(d, "Computer", "Announces a computer service over mDNS")
+	default:
+		// A manufacturer alone only labels devices nobody has classified yet.
+		vendor := strings.ToLower(S(d, "macVendor"))
+		if vendor == "" || !contains([]string{"Network endpoint", "Endpoint", ""}, S(d, "category")) {
+			return
+		}
+		for _, v := range vendorCategories {
+			if strings.Contains(vendor, v.match) {
+				classify(d, v.category, "MAC address registered to "+S(d, "macVendor"))
+				return
+			}
+		}
+	}
+}

@@ -173,6 +173,7 @@ func New(config Config) (*App, error) {
 		log.Printf("First-run setup code (needed only when setting up from another computer): %s", a.setupCode)
 	}
 	a.migrateInternetEndpoints()
+	a.refreshDeviceIdentity()
 	a.startProxmox()
 	a.startRemoteInventory()
 	a.startSNMPSweeps()

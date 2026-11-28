@@ -167,7 +167,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	send := func() error {
-		snapshotCtx, done := context.WithTimeout(ctx, 150*time.Second)
+		snapshotCtx, done := context.WithTimeout(ctx, 170*time.Second)
 		defer done()
 		connections, e := collect(snapshotCtx)
 		if e != nil {
@@ -215,6 +215,10 @@ func main() {
 					enrichNetworkScan(scanCtx, &result)
 					stopScan()
 					snapshot.NetworkScan = &result
+					// Find devices that ignore TCP probes (printers, TVs, IoT, phones, NAS).
+					sweepCtx, stopSweep := context.WithTimeout(snapshotCtx, 60*time.Second)
+					snapshot.Neighbors = sweepLocal(sweepCtx, profile.Config.CIDRs, snapshot.Neighbors)
+					stopSweep()
 				}
 				payloadData["discovery"] = snapshot
 			}

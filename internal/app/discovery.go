@@ -309,16 +309,13 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 			return host
 		}
 		asset := a.findAsset(oid, ip)
-		name := S(observation, "hostname")
-		if name == "" {
-			name = ip
-		}
-		if len(name) > 180 {
-			name = ip
+		name := firstNonEmpty(clip(S(observation, "friendlyName"), 180), clip(S(observation, "hostname"), 180), ip)
+		if s := S(observation, "source"); s != "" && len(s) <= 60 {
+			source = s
 		}
 		fields := M{"name": name, "ip": ip, "category": "Network endpoint", "status": "Discovered", "autoDiscovered": true, "discoverySource": source, "mac": S(observation, "mac")}
 		if asset == nil {
-			applyMACVendor(fields)
+			identifyLocalDevice(fields, observation)
 			asset = upsert("assets", "remote:"+ip, fields)
 		} else {
 			raw := a.get("SELECT * FROM records WHERE id=?", S(asset, "id"))
@@ -329,11 +326,16 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 				current["approvalStatus"] = "Pending"
 			}
 
-			current["observedHostname"] = S(observation, "hostname")
+			if hostname := clip(S(observation, "hostname"), 180); hostname != "" {
+				current["observedHostname"] = hostname
+			}
 			if S(current, "mac") == "" {
 				current["mac"] = S(observation, "mac")
 			}
-			applyMACVendor(current)
+			identifyLocalDevice(current, observation)
+			if current["autoDiscovered"] == true && S(current, "name") == ip && name != ip {
+				current["name"] = name
+			}
 			if current["autoDiscovered"] == true {
 				current["status"] = "Discovered"
 			}
@@ -445,8 +447,10 @@ func (a *App) ingestDiscovery(collector, u, host, snapshot M, observed string, u
 				identity["candidateReason"] = "Distribution-specific SSH banner identifies a Linux host. Its server or desktop role has not been verified."
 			}
 
-			if S(identity, "os") == "" && S(device, "os") == "Linux" {
+			if (S(identity, "os") == "" || identity["osInferred"] == true) && S(device, "os") == "Linux" {
 				identity["os"] = "Linux"
+				delete(identity, "osInferred")
+				identity["osEvidence"] = "Distribution-specific SSH banner"
 			}
 			if proxmoxListener && S(device, "product") == "Proxmox Virtual Environment" && S(device, "deviceType") == "Server" && strings.Contains(strings.ToLower(S(device, "webTitle")), "proxmox virtual environment") && (contains([]string{"Network endpoint", "Endpoint", "Computer", ""}, S(identity, "category")) || identity["categoryAutoDetected"] == true) {
 				identity["category"] = "Server"

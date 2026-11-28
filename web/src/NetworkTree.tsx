@@ -13,7 +13,7 @@ import {tx} from './i18n';
 // walking outwards from each subnet's gateway. Devices with no known switch
 // port are grouped by device type under their subnet.
 
-interface TreeNode {id:string;kind:'org'|'collector'|'gateway'|'subnet'|'group'|'device';label:string;sub?:string;port?:string;category?:string;recordId?:string;children:TreeNode[];count?:number}
+interface TreeNode {id:string;kind:'org'|'collector'|'gateway'|'subnet'|'group'|'device';label:string;sub?:string;pending?:boolean;os?:string;port?:string;category?:string;recordId?:string;children:TreeNode[];count?:number}
 interface Collector {id:string;name:string;orgId:string;assetId:string;discovery?:{config?:{cidrs?:string[]}}}
 interface Placed {node:TreeNode;key:string;x:number;y:number;depth:number;parent?:Placed}
 
@@ -22,9 +22,9 @@ const ROW=38,COL=250,NODE_W=200,NODE_H=30;
 function ipNumber(ip:string){const p=ip.split('.').map(Number);return p.length===4&&p.every(n=>n>=0&&n<=255)?((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3]:-1}
 function inCidr(ip:string,cidr:string){const [base,bits]=cidr.split('/'),n=ipNumber(ip),b=ipNumber(base),len=Number(bits);if(n<0||b<0||!(len>=0&&len<=32))return false;const mask=len===0?0:(~0<<(32-len))>>>0;return ((n&mask)>>>0)===((b&mask)>>>0)}
 const prefix=(cidr:string)=>Number(cidr.split('/')[1])||0;
-const plural:Record<string,string>={'Router':'Routers','Switch':'Switches','Firewall':'Firewalls','Access point':'Access points','Network device':'Network devices','Printer':'Printers','Storage':'Storage','Server':'Servers','Virtual machine':'Virtual machines','Laptop':'Laptops','Desktop':'Desktops','Workstation':'Workstations','Computer':'Computers','Endpoint':'Endpoints','Network endpoint':'Network endpoints'};
+const plural:Record<string,string>={'Router':'Routers','Switch':'Switches','Firewall':'Firewalls','Access point':'Access points','Network device':'Network devices','Printer':'Printers','Storage':'Storage','Server':'Servers','Virtual machine':'Virtual machines','Laptop':'Laptops','Desktop':'Desktops','Workstation':'Workstations','Computer':'Computers','Endpoint':'Endpoints','Network endpoint':'Network endpoints','TV / media device':'TVs & media devices','IoT device':'IoT devices','Camera':'Cameras','Phone / tablet':'Phones & tablets'};
 const infra=['Router','Switch','Firewall','Access point','Network device'];
-const tone=(n:TreeNode)=>n.kind!=='device'&&n.kind!=='gateway'?n.kind:n.category==='Router'||n.category==='Firewall'?'router':n.category==='Switch'||n.category==='Network device'?'switch':n.category==='Access point'?'ap':n.category==='Printer'?'printer':n.category==='Server'||n.category==='Storage'||n.category==='Virtual machine'?'server':'device';
+const tone=(n:TreeNode)=>n.kind!=='device'&&n.kind!=='gateway'?n.kind:n.category==='Router'||n.category==='Firewall'?'router':n.category==='Switch'||n.category==='Network device'?'switch':n.category==='Access point'?'ap':n.category==='Printer'?'printer':n.category==='TV / media device'||n.category==='IoT device'||n.category==='Camera'?'iot':n.category==='Server'||n.category==='Storage'||n.category==='Virtual machine'?'server':'device';
 
 export function buildNetworkTree(records:Item[],collectors:Collector[],orgFilter:string):TreeNode[]{
  const orgs=records.filter(r=>r.type==='organizations'&&(!orgFilter||r.id===orgFilter));
@@ -49,7 +49,7 @@ export function buildNetworkTree(records:Item[],collectors:Collector[],orgFilter
   for(const [child,p] of parent)childrenOf.set(p.id,[...(childrenOf.get(p.id)||[]),child]);
   const deviceNode=(a:Item,depth=0):TreeNode=>{
    const kids=(childrenOf.get(a.id)||[]).map(id=>byId.get(id)!).sort(sortDevices);
-   return {id:'d:'+a.id,kind:'device',label:a.name,sub:[text(a.ip),text(a.manufacturer)].filter(Boolean).join(' · '),port:parent.get(a.id)?.port,category:text(a.category),recordId:a.id,children:depth>40?[]:kids.map(k=>deviceNode(k,depth+1))};
+   return {id:'d:'+a.id,kind:'device',label:a.name,sub:[a.name===text(a.ip)?'':text(a.ip),text(a.manufacturer)||(a.macRandomized?'Private Wi-Fi':text(a.macVendor)),text(a.os).replace(/ (.*)$/,'')].filter(Boolean).join(' · '),pending:a.approvalStatus==='Pending',os:text(a.os),port:parent.get(a.id)?.port,category:text(a.category),recordId:a.id,children:depth>40?[]:kids.map(k=>deviceNode(k,depth+1))};
   };
   const grouped=(prefixId:string,list:Item[]):TreeNode[]=>{
    const byType=new Map<string,Item[]>();
@@ -96,7 +96,7 @@ export function NetworkTree({records,scope,user,onOpen}:{records:Item[];scope:st
  const roots=useMemo(()=>buildNetworkTree(records,collectors,scope),[records,collectors,scope]);
  const q=query.trim().toLowerCase();
  // Search opens every ancestor of a match.
- const forced=useMemo(()=>{const s=new Set<string>();if(!q)return s;const walk=(n:TreeNode,path:string[]):boolean=>{let hit=false;for(const c of n.children)if(walk(c,[...path,n.id]))hit=true;const self=n.kind==='device'&&(n.label.toLowerCase().includes(q)||(n.sub||'').toLowerCase().includes(q));if(hit)s.add(n.id);return hit||self};roots.forEach(r=>walk(r,[]));return s},[roots,q]);
+ const forced=useMemo(()=>{const s=new Set<string>();if(!q)return s;const walk=(n:TreeNode,path:string[]):boolean=>{let hit=false;for(const c of n.children)if(walk(c,[...path,n.id]))hit=true;const self=n.kind==='device'&&`${n.label} ${n.sub||''} ${n.os||''} ${n.category||''}`.toLowerCase().includes(q);if(hit)s.add(n.id);return hit||self};roots.forEach(r=>walk(r,[]));return s},[roots,q]);
  const isOpen=(n:TreeNode)=>forced.has(n.id)||(open[n.id]??defaultOpen(n));
  const placed:Placed[]=[];let row=0;
  const layout=(n:TreeNode,depth:number,parent?:Placed):Placed=>{const p:Placed={node:n,key:(parent?parent.key+'/':'')+n.id,x:depth*COL,y:0,depth,parent};placed.push(p);const kids=isOpen(n)?n.children:[];if(!kids.length){p.y=row*ROW;row++}else{const ys=kids.map(k=>layout(k,depth+1,p).y);p.y=(ys[0]+ys[ys.length-1])/2}return p};
@@ -114,16 +114,16 @@ export function NetworkTree({records,scope,user,onOpen}:{records:Item[];scope:st
    <div className="zoom-controls"><button aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(.4,+(z-.1).toFixed(1)))}>−</button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(1.6,+(z+.1).toFixed(1)))}>+</button></div>
   </Heading>
   <div className="tree-stats"><span><b>{devices.length}</b> <span>devices</span></span><span><b>{networkGear}</b> <span>network devices</span></span><span><b>{onPorts}</b> <span>placed on switch ports</span></span>
-   <span className="tree-legend">{(['router','switch','ap','server','printer','device'] as const).map(k=><span key={k}><i className={'dot tone-'+k}/>{{router:'Router / firewall',switch:'Switch',ap:'Access point',server:'Server / storage',printer:'Printer',device:'Other device'}[k]}</span>)}</span></div>
+   <span className="tree-legend">{(['router','switch','ap','server','printer','iot','device'] as const).map(k=><span key={k}><i className={'dot tone-'+k}/>{{router:'Router / firewall',switch:'Switch',ap:'Access point',server:'Server / storage',printer:'Printer',iot:'TV / IoT / camera',device:'Other device'}[k]}</span>)}</span></div>
   {!devices.length?<Empty title="No discovered devices yet">Install a collector or add an SNMP credential under Setup → Integrations to discover your network.</Empty>:
   <div className="tree-canvas"><svg width={width*zoom} height={height*zoom} viewBox={`0 0 ${width} ${height}`} role="tree" aria-label="Network tree">
    {placed.filter(p=>p.parent).map(p=>{const a=p.parent!,x1=a.x+NODE_W,y1=a.y+NODE_H/2,x2=p.x,y2=p.y+NODE_H/2,mid=(x1+x2)/2;return <g key={'e'+p.key}><path className="tree-edge" d={`M${x1} ${y1}C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`}/>{p.node.port&&<text className="tree-port" x={x2-6} y={y2-5} textAnchor="end" data-no-translate>{p.node.port}</text>}</g>})}
-   {placed.map(p=>{const n=p.node,has=n.children.length>0,opened=isOpen(n);return <g key={p.key} className={'tree-node tone-'+tone(n)+(match(n)?' match':'')} transform={`translate(${p.x} ${p.y})`} role="treeitem" aria-expanded={has?opened:undefined} tabIndex={0} onClick={()=>activate(n)} onKeyDown={e=>{if(e.key==='Enter')activate(n);if(e.key===' '&&has){e.preventDefault();toggle(n)}}}>
+   {placed.map(p=>{const n=p.node,has=n.children.length>0,opened=isOpen(n);return <g key={p.key} className={'tree-node tone-'+tone(n)+(match(n)?' match':'')+(n.pending?' pending':'')} transform={`translate(${p.x} ${p.y})`} role="treeitem" aria-expanded={has?opened:undefined} tabIndex={0} onClick={()=>activate(n)} onKeyDown={e=>{if(e.key==='Enter')activate(n);if(e.key===' '&&has){e.preventDefault();toggle(n)}}}>
     <rect width={NODE_W} height={NODE_H} rx={7}/><rect className="tree-accent" width={4} height={NODE_H} rx={2}/>
     <text x={12} y={n.sub?13:19} className="tree-label" data-no-translate={n.kind==='device'||n.kind==='subnet'||n.kind==='org'||n.kind==='collector'?'':undefined}>{n.label.length>26?n.label.slice(0,25)+'…':n.label}{n.count!==undefined&&<tspan className="tree-count"> {n.count}</tspan>}</text>
     {n.sub&&<text x={12} y={25} className="tree-sub" data-no-translate>{n.sub.length>34?n.sub.slice(0,33)+'…':n.sub}</text>}
     {has&&<g className="tree-toggle" onClick={e=>{e.stopPropagation();toggle(n)}}><circle cx={NODE_W} cy={NODE_H/2} r={8}/><text x={NODE_W} y={NODE_H/2+4} textAnchor="middle" data-no-translate>{opened?'−':'+'}</text></g>}
-    <title>{[n.label,n.sub,n.category,n.port?tx('Switch port')+': '+n.port:''].filter(Boolean).join('\n')}</title>
+    <title>{[n.label,n.sub,n.category,n.os,n.pending?tx('Awaiting approval'):'',n.port?tx('Switch port')+': '+n.port:''].filter(Boolean).join('\n')}</title>
    </g>})}
   </svg></div>}
  </>;

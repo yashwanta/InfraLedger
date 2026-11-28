@@ -35,9 +35,19 @@ type InterfaceFacts struct {
 	DNS       []string `json:"dns,omitempty"`
 }
 type Neighbor struct {
-	IP       string `json:"ip"`
-	MAC      string `json:"mac,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
+	IP           string   `json:"ip"`
+	MAC          string   `json:"mac,omitempty"`
+	Hostname     string   `json:"hostname,omitempty"`
+	FriendlyName string   `json:"friendlyName,omitempty"`
+	Manufacturer string   `json:"manufacturer,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	UPnPType     string   `json:"upnpType,omitempty"`
+	Services     []string `json:"services,omitempty"`
+	Evidence     []string `json:"identityEvidence,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	TTL          int      `json:"ttl,omitempty"`
+	NetBIOSName  string   `json:"netbiosName,omitempty"`
+	NetBIOSGroup string   `json:"netbiosGroup,omitempty"`
 }
 type DiscoveredDevice struct {
 	OS               string   `json:"os,omitempty"`
@@ -141,8 +151,8 @@ func localDiscovery(ctx context.Context) (DiscoverySnapshot, error) {
 		if snapshot.Host.OSVersion == "" {
 			snapshot.InventoryWarnings = append(snapshot.InventoryWarnings, "Windows hardware details unavailable. Check access to CIM on the collector host; device type remains unclassified.")
 		}
-		if raw, e := command(ctx, "arp", "-a"); e == nil {
-			snapshot.Neighbors = parseNeighbors(raw)
+		if neighbors := readNeighborTable(ctx); neighbors != nil {
+			snapshot.Neighbors = neighbors
 		}
 	} else if runtime.GOOS == "linux" {
 		for file, target := range map[string]*string{"/sys/class/dmi/id/sys_vendor": &snapshot.Host.Manufacturer, "/sys/class/dmi/id/product_name": &snapshot.Host.Model, "/sys/class/dmi/id/product_serial": &snapshot.Host.Serial} {
@@ -167,8 +177,8 @@ func localDiscovery(ctx context.Context) (DiscoverySnapshot, error) {
 				}
 			}
 		}
-		if raw, e := command(ctx, "ip", "-4", "neigh", "show"); e == nil {
-			snapshot.Neighbors = parseNeighbors(raw)
+		if neighbors := readNeighborTable(ctx); neighbors != nil {
+			snapshot.Neighbors = neighbors
 		}
 		if b, e := os.ReadFile("/proc/net/route"); e == nil {
 			for _, line := range strings.Split(string(b), "\n") {
